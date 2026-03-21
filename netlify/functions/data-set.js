@@ -25,7 +25,7 @@ exports.handler = async (event) => {
 
   try {
     const token  = process.env.NETLIFY_BLOBS_TOKEN || process.env.NETLIFY_API_TOKEN;
-    const siteId = process.env.SITE_ID || process.env.NETLIFY_SITE_ID;
+    const siteId = process.env.NETLIFY_SITE_ID;
 
     if (!token || !siteId) {
       // No Blobs config — acknowledge without saving to cloud

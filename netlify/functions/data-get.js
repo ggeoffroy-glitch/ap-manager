@@ -20,7 +20,7 @@ exports.handler = async (event) => {
   try {
     // Netlify Blobs REST API — token is auto-injected in Functions context
     const token  = process.env.NETLIFY_BLOBS_TOKEN || process.env.NETLIFY_API_TOKEN;
-    const siteId = process.env.SITE_ID || process.env.NETLIFY_SITE_ID;
+    const siteId = process.env.NETLIFY_SITE_ID;
 
     if (!token || !siteId) {
       return { statusCode: 200, headers, body: JSON.stringify({ data: null, exists: false, fallback: true }) };
