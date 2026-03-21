@@ -27,7 +27,7 @@ exports.handler = async (event) => {
     `&response_type=code` +
     `&scope=${encodeURIComponent(scope)}` +
     `&state=${encodeURIComponent(state)}` +
-    `&prompt=select_account`;  // Forces company selector for QBOA accountants
+    `&prompt=login%20consent`;  // Forces full re-login + company selector every time
 
   return {
     statusCode: 302,
