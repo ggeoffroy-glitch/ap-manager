@@ -16,14 +16,18 @@ exports.handler = async (event) => {
     ts: Date.now()
   })).toString('base64url');
 
-  const scope  = 'com.intuit.quickbooks.accounting';
+  // Request both accounting scope AND openid to get user info + company list
+  // prompt=select_account forces Intuit to show the company selector for QBOA users
+  const scope = 'com.intuit.quickbooks.accounting openid profile email';
+
   const authUrl =
     `https://appcenter.intuit.com/connect/oauth2` +
     `?client_id=${encodeURIComponent(clientId)}` +
     `&redirect_uri=${encodeURIComponent(redirectUri)}` +
     `&response_type=code` +
     `&scope=${encodeURIComponent(scope)}` +
-    `&state=${encodeURIComponent(state)}`;
+    `&state=${encodeURIComponent(state)}` +
+    `&prompt=select_account`;  // Forces company selector for QBOA accountants
 
   return {
     statusCode: 302,

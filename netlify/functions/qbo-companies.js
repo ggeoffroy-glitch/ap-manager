@@ -34,32 +34,8 @@ exports.handler = async (event) => {
     if (uiRes.ok) userInfo = await uiRes.json();
   } catch(e) {}
 
-  // 2. Try QBOA firm endpoints to list all companies
-  const firmEndpoints = [
-    'https://qbo.intuit.com/manage/qbomanager_proxy/v1/userCompanies',
-    'https://qbo.intuit.com/qbo1/rest/primecustomer/v1/companies',
-  ];
-
-  for (const endpoint of firmEndpoints) {
-    if (companies.length > 0) break;
-    try {
-      const r = await fetch(endpoint, {
-        headers: { 'Authorization': `Bearer ${access_token}`, 'Accept': 'application/json' }
-      });
-      if (!r.ok) continue;
-      const d = await r.json();
-      const raw = d?.CompanyList?.Company || d?.companies || d?.data || d?.Entities || (Array.isArray(d) ? d : []);
-      if (raw.length > 0) {
-        companies = raw.map(c => ({
-          name:    c.CompanyName || c.companyName || c.name || c.Name || 'Sans nom',
-          realmId: String(c.CompanyId || c.realmId || c.id || c.Id || ''),
-          country: c.Country || 'CA',
-        })).filter(c => c.realmId);
-      }
-    } catch(e) {}
-  }
-
-  // 3. Get the specific company info from the OAuth realmId
+  // 2. Get the company name for the realmId from OAuth (most reliable method)
+  // This is the company the user SELECTED during OAuth login
   if (realm_id) {
     try {
       const infoRes = await fetch(
@@ -69,9 +45,44 @@ exports.handler = async (event) => {
       if (infoRes.ok) {
         const info = await infoRes.json();
         const companyName = info?.CompanyInfo?.CompanyName || '';
-        if (companyName && !companies.find(c => c.realmId === realm_id)) {
-          companies.unshift({ name: companyName, realmId: realm_id, country: 'CA', current: true });
+        const country     = info?.CompanyInfo?.Country || 'CA';
+        if (companyName) {
+          companies.push({ name: companyName, realmId: realm_id, country, current: true });
         }
+      }
+    } catch(e) {}
+  }
+
+  // 3. Try Intuit platform API for all accessible companies (QBOA firm endpoint)
+  const firmEndpoints = [
+    'https://accounts.platform.intuit.com/v1/openid_connect/userinfo',
+    'https://qbo.intuit.com/manage/qbomanager_proxy/v1/userCompanies',
+  ];
+
+  for (const endpoint of firmEndpoints) {
+    try {
+      const r = await fetch(endpoint, {
+        headers: { 'Authorization': `Bearer ${access_token}`, 'Accept': 'application/json' }
+      });
+      if (!r.ok) continue;
+      const d = await r.json();
+
+      // Try all known response shapes for QBOA company lists
+      const raw = d?.CompanyList?.Company ||
+                  d?.companies           ||
+                  d?.data                ||
+                  d?.Entities            ||
+                  (Array.isArray(d) ? d : []);
+
+      if (raw.length > 0) {
+        const fetched = raw.map(c => ({
+          name:    c.CompanyName || c.companyName || c.name || c.Name || 'Sans nom',
+          realmId: String(c.CompanyId || c.realmId || c.id || c.Id || ''),
+          country: c.Country || 'CA',
+        })).filter(c => c.realmId && c.realmId !== realm_id); // avoid duplicate
+
+        companies = [...companies, ...fetched];
+        if (fetched.length > 0) break;
       }
     } catch(e) {}
   }
