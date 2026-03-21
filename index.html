@@ -550,6 +550,55 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   </div>
 </div>
 
+<!-- ════════ MODAL: QBO COMPANY PICKER ════════ -->
+<div class="modal-backdrop" id="qboPickerModal">
+  <div class="modal" style="width:540px">
+    <div class="modal-title">Associer un compte QuickBooks</div>
+    <p style="font-family:var(--mono);font-size:10px;color:var(--text-muted);margin-bottom:16px;line-height:1.7">
+      Quel compte QuickBooks souhaitez-vous lier au client<br>
+      <span style="color:var(--accent2)" id="qboPickerClientName"></span> ?
+    </p>
+
+    <!-- Loading -->
+    <div id="qboPickerLoading" style="text-align:center;padding:24px">
+      <div class="spinner" style="margin:0 auto 12px"></div>
+      <div style="font-family:var(--mono);font-size:10px;color:var(--text-muted)">Récupération de vos entreprises QBO...</div>
+    </div>
+
+    <!-- Company list -->
+    <div id="qboPickerList" style="display:none">
+      <div id="qboPickerCompanies" style="max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--rs);margin-bottom:16px"></div>
+      <div style="display:flex;gap:9px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="closeCompanyPicker()">Annuler</button>
+        <button class="btn btn-qbo" onclick="confirmCompanyPicker()">✓ Associer ce compte</button>
+      </div>
+    </div>
+
+    <!-- Manual Realm ID entry fallback -->
+    <div id="qboPickerManual" style="display:none">
+      <div class="alert-bar alert-warning show" style="margin-bottom:14px">
+        <span>ℹ</span>
+        <span>L'API n'a pas retourné la liste automatiquement. Entrez le Realm ID manuellement.</span>
+      </div>
+      <p style="font-family:var(--mono);font-size:9px;color:var(--text-muted);margin-bottom:10px;line-height:1.7">
+        Pour trouver le Realm ID: connectez-vous à QuickBooks → l'URL contient <span style="color:var(--accent2)">?company=XXXXXXXXX</span> — ce nombre est votre Realm ID.
+      </p>
+      <div class="field" style="margin-bottom:16px">
+        <label>Realm ID (Company ID) *</label>
+        <input type="text" id="pickerRealmId" placeholder="Ex: 4620816365234567890" style="font-family:var(--mono)">
+      </div>
+      <div class="field" style="margin-bottom:16px">
+        <label>Nom de l'entreprise (optionnel)</label>
+        <input type="text" id="pickerCompanyName" placeholder="Ex: Parma Cafe inc.">
+      </div>
+      <div style="display:flex;gap:9px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="closeCompanyPicker()">Annuler</button>
+        <button class="btn btn-qbo" onclick="confirmManualPicker()">✓ Associer</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ════════ MODAL: IMPORT QBO CLIENTS ════════ -->
 <div class="modal-backdrop" id="qboImportModal">
   <div class="modal" style="width:560px">
@@ -690,6 +739,9 @@ function currentQBO() {
 // ═══════════════════════════════════════════════
 // OAUTH CALLBACK HANDLER — runs on page load
 // ═══════════════════════════════════════════════
+// Temp storage for pending OAuth tokens (before company is picked)
+let pendingOAuthTokens = null;
+
 function handleOAuthCallback() {
   const hash = window.location.hash.slice(1);
   if (!hash) return;
@@ -703,41 +755,154 @@ function handleOAuthCallback() {
     return;
   }
 
-  // Success callback
   const accessToken  = params.get('qbo_access_token');
   const refreshToken = params.get('qbo_refresh_token');
   const realmId      = params.get('qbo_realm_id');
   const clientName   = params.get('qbo_client');
   const expiresAt    = parseInt(params.get('qbo_expires_at')) || (Date.now() + 3600000);
 
-  if (accessToken && refreshToken && realmId) {
-    // Store tokens for the matching client
-    const targetClient = clientName || state.currentClient;
+  if (accessToken && refreshToken) {
+    // Clean URL first
+    window.history.replaceState(null, '', window.location.pathname);
 
-    if (targetClient && state.clients.find(c => c.name === targetClient)) {
-      if (!state.qboTokens[targetClient]) state.qboTokens[targetClient] = {};
-      Object.assign(state.qboTokens[targetClient], {
-        access_token:  accessToken,
-        refresh_token: refreshToken,
-        realm_id:      realmId,
-        expires_at:    expiresAt,
-        last_sync:     null,
-      });
-      // Switch to that client
-      state.currentClient = targetClient;
-      document.getElementById('clientSelect').value = targetClient;
-      saveState();
-      updateQBOStatus();
-      showQBOAlert('QuickBooks connecté avec succès! Cliquez "Synchroniser QBO" pour importer les factures.');
-      // Auto sync
-      syncQBO();
-    } else {
-      showError('Client introuvable pour la connexion QBO. Sélectionnez le bon client et reconnectez.');
+    // Store pending tokens
+    pendingOAuthTokens = { accessToken, refreshToken, realmId, expiresAt, clientName };
+
+    // Restore client context
+    if (clientName && state.clients.find(c => c.name === clientName)) {
+      state.currentClient = clientName;
+      document.getElementById('clientSelect').value = clientName;
     }
 
-    // Clean URL
-    window.history.replaceState(null, '', window.location.pathname);
+    // Open company picker modal
+    openCompanyPicker();
   }
+}
+
+async function openCompanyPicker() {
+  document.getElementById('qboPickerModal').classList.add('open');
+  document.getElementById('qboPickerLoading').style.display = 'block';
+  document.getElementById('qboPickerList').style.display = 'none';
+  document.getElementById('qboPickerManual').style.display = 'none';
+
+  const clientLabel = state.currentClient || '(client actif)';
+  document.getElementById('qboPickerClientName').textContent = clientLabel;
+
+  try {
+    const tokens = pendingOAuthTokens;
+    const params = new URLSearchParams({
+      access_token: tokens.accessToken,
+      ...(tokens.realmId ? { realm_id: tokens.realmId } : {})
+    });
+
+    const res  = await fetch(`/.netlify/functions/qbo-companies?${params}`);
+    const data = await res.json();
+
+    document.getElementById('qboPickerLoading').style.display = 'none';
+
+    if (data.needsManual || !data.companies || data.companies.length === 0) {
+      // Show manual realm ID entry
+      document.getElementById('qboPickerManual').style.display = 'block';
+      // Pre-fill with the realmId we got from OAuth if available
+      if (tokens.realmId) {
+        document.getElementById('pickerRealmId').value = tokens.realmId;
+      }
+    } else {
+      // Show company list
+      renderCompanyPickerList(data.companies);
+      document.getElementById('qboPickerList').style.display = 'block';
+    }
+  } catch(err) {
+    document.getElementById('qboPickerLoading').style.display = 'none';
+    document.getElementById('qboPickerManual').style.display = 'block';
+    if (pendingOAuthTokens?.realmId) {
+      document.getElementById('pickerRealmId').value = pendingOAuthTokens.realmId;
+    }
+  }
+}
+
+function renderCompanyPickerList(companies) {
+  const container = document.getElementById('qboPickerCompanies');
+  container.innerHTML = companies.map((c, i) => `
+    <div class="inv-sel-item" onclick="selectPickerCompany(${i})" style="cursor:pointer" id="pickerItem_${i}">
+      <input type="radio" name="qboCompany" style="accent-color:var(--accent);flex-shrink:0" 
+        value="${c.realmId}" id="pickerRadio_${i}" onchange="selectPickerCompany(${i})">
+      <div class="inv-sel-info">
+        <div class="inv-sel-vendor">${c.name}</div>
+        <div class="inv-sel-meta">Realm ID: ${c.realmId} ${c.current ? '· <span style="color:var(--success)">Compte actif</span>' : ''}</div>
+      </div>
+    </div>
+  `).join('');
+
+  // Auto-select the current realmId if in the list
+  if (pendingOAuthTokens?.realmId) {
+    const idx = companies.findIndex(c => c.realmId === pendingOAuthTokens.realmId);
+    if (idx >= 0) {
+      document.getElementById(`pickerRadio_${idx}`).checked = true;
+    }
+  }
+
+  // Store companies for confirmation
+  window._pickerCompanies = companies;
+}
+
+function selectPickerCompany(idx) {
+  document.getElementById(`pickerRadio_${idx}`).checked = true;
+}
+
+function confirmCompanyPicker() {
+  if (!state.currentClient) { showError('Aucun client sélectionné dans le dashboard.'); return; }
+
+  let selectedRealmId = '';
+  let selectedName    = '';
+
+  // Check radio selection
+  const radio = document.querySelector('input[name="qboCompany"]:checked');
+  if (radio) {
+    selectedRealmId = radio.value;
+    const idx = Array.from(document.querySelectorAll('input[name="qboCompany"]')).indexOf(radio);
+    selectedName = window._pickerCompanies?.[idx]?.name || '';
+  }
+
+  if (!selectedRealmId) {
+    alert('Veuillez sélectionner une entreprise QuickBooks.');
+    return;
+  }
+
+  linkQBOCompany(selectedRealmId, selectedName);
+}
+
+function confirmManualPicker() {
+  const realmId     = document.getElementById('pickerRealmId').value.trim();
+  const companyName = document.getElementById('pickerCompanyName').value.trim();
+  if (!realmId) { alert('Veuillez entrer le Realm ID.'); return; }
+  linkQBOCompany(realmId, companyName);
+}
+
+function linkQBOCompany(realmId, companyName) {
+  const tokens = pendingOAuthTokens;
+  if (!tokens) { showError('Session expirée, reconnectez QBO.'); return; }
+
+  if (!state.qboTokens[state.currentClient]) state.qboTokens[state.currentClient] = {};
+  Object.assign(state.qboTokens[state.currentClient], {
+    access_token:  tokens.accessToken,
+    refresh_token: tokens.refreshToken,
+    realm_id:      realmId,
+    expires_at:    tokens.expiresAt,
+    last_sync:     null,
+    qbo_company:   companyName,
+  });
+
+  pendingOAuthTokens = null;
+  saveState();
+  closeCompanyPicker();
+  updateQBOStatus();
+  showQBOAlert(`QuickBooks connecté — ${companyName || realmId}. Synchronisation en cours...`);
+  syncQBO();
+}
+
+function closeCompanyPicker() {
+  document.getElementById('qboPickerModal').classList.remove('open');
 }
 
 // ═══════════════════════════════════════════════

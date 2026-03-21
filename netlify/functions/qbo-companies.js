@@ -9,112 +9,81 @@ exports.handler = async (event) => {
     return { statusCode: 200, headers, body: '' };
   }
 
-  const { access_token } = event.queryStringParameters || {};
+  const { access_token, realm_id } = event.queryStringParameters || {};
 
   if (!access_token) {
-    return {
-      statusCode: 400,
-      headers,
-      body: JSON.stringify({ error: 'access_token manquant' })
-    };
+    return { statusCode: 400, headers, body: JSON.stringify({ error: 'access_token manquant' }) };
   }
 
+  const env     = process.env.QBO_ENVIRONMENT || 'production';
+  const baseQBO = env === 'sandbox'
+    ? 'https://sandbox-quickbooks.api.intuit.com'
+    : 'https://quickbooks.api.intuit.com';
+
+  let companies = [];
+  let userInfo  = {};
+
+  // 1. Get user info
   try {
-    // Fetch all companies the accountant has access to via Intuit Platform API
-    const res = await fetch(
-      'https://accounts.platform.intuit.com/v1/openid_connect/userinfo',
-      {
-        headers: {
-          'Authorization': `Bearer ${access_token}`,
-          'Accept': 'application/json'
-        }
-      }
-    );
-
-    if (!res.ok) {
-      if (res.status === 401) {
-        return {
-          statusCode: 401,
-          headers,
-          body: JSON.stringify({ error: 'Token expiré', code: 'TOKEN_EXPIRED' })
-        };
-      }
-      throw new Error(`Intuit API error: ${res.status}`);
+    const uiRes = await fetch('https://accounts.platform.intuit.com/v1/openid_connect/userinfo', {
+      headers: { 'Authorization': `Bearer ${access_token}`, 'Accept': 'application/json' }
+    });
+    if (uiRes.status === 401) {
+      return { statusCode: 401, headers, body: JSON.stringify({ error: 'Token expiré', code: 'TOKEN_EXPIRED' }) };
     }
+    if (uiRes.ok) userInfo = await uiRes.json();
+  } catch(e) {}
 
-    const userInfo = await res.json();
+  // 2. Try QBOA firm endpoints to list all companies
+  const firmEndpoints = [
+    'https://qbo.intuit.com/manage/qbomanager_proxy/v1/userCompanies',
+    'https://qbo.intuit.com/qbo1/rest/primecustomer/v1/companies',
+  ];
 
-    // Also fetch the list of all companies via the QBO firm API
-    const companiesRes = await fetch(
-      'https://accounts.platform.intuit.com/v1/openid_connect/userinfo',
-      {
-        headers: {
-          'Authorization': `Bearer ${access_token}`,
-          'Accept': 'application/json'
-        }
+  for (const endpoint of firmEndpoints) {
+    if (companies.length > 0) break;
+    try {
+      const r = await fetch(endpoint, {
+        headers: { 'Authorization': `Bearer ${access_token}`, 'Accept': 'application/json' }
+      });
+      if (!r.ok) continue;
+      const d = await r.json();
+      const raw = d?.CompanyList?.Company || d?.companies || d?.data || d?.Entities || (Array.isArray(d) ? d : []);
+      if (raw.length > 0) {
+        companies = raw.map(c => ({
+          name:    c.CompanyName || c.companyName || c.name || c.Name || 'Sans nom',
+          realmId: String(c.CompanyId || c.realmId || c.id || c.Id || ''),
+          country: c.Country || 'CA',
+        })).filter(c => c.realmId);
       }
-    );
-
-    // Try to get all realmIds the user has access to
-    // For QBOA, fetch company list from the firm management endpoint
-    const firmRes = await fetch(
-      'https://qbo.intuit.com/manage/qbomanager_proxy/v1/userCompanies',
-      {
-        headers: {
-          'Authorization': `Bearer ${access_token}`,
-          'Accept': 'application/json',
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    let companies = [];
-
-    if (firmRes.ok) {
-      const firmData = await firmRes.json();
-      // Extract companies from QBOA firm response
-      const rawCompanies = firmData?.CompanyList?.Company ||
-                           firmData?.companies ||
-                           firmData?.data ||
-                           [];
-
-      companies = rawCompanies.map(c => ({
-        name:    c.CompanyName || c.name || c.companyName || 'Unnamed',
-        realmId: c.CompanyId   || c.realmId || c.id || '',
-        country: c.Country     || c.country || 'CA',
-        active:  c.IsActive !== false
-      })).filter(c => c.realmId && c.active);
-    }
-
-    // Fallback: if firm API didn't work, return at least the current user's company
-    if (companies.length === 0 && userInfo) {
-      companies = [{
-        name:    userInfo.givenname || userInfo.name || userInfo.email || 'Mon entreprise',
-        realmId: '', // Will need manual realm_id entry
-        country: 'CA',
-        active:  true,
-        note:    'Entrez le Realm ID manuellement'
-      }];
-    }
-
-    return {
-      statusCode: 200,
-      headers,
-      body: JSON.stringify({
-        companies,
-        user: {
-          name:  userInfo?.givenname || '',
-          email: userInfo?.email || ''
-        },
-        count: companies.length
-      })
-    };
-
-  } catch (err) {
-    return {
-      statusCode: 500,
-      headers,
-      body: JSON.stringify({ error: err.message })
-    };
+    } catch(e) {}
   }
+
+  // 3. Get the specific company info from the OAuth realmId
+  if (realm_id) {
+    try {
+      const infoRes = await fetch(
+        `${baseQBO}/v3/company/${realm_id}/companyinfo/${realm_id}?minorversion=65`,
+        { headers: { 'Authorization': `Bearer ${access_token}`, 'Accept': 'application/json' } }
+      );
+      if (infoRes.ok) {
+        const info = await infoRes.json();
+        const companyName = info?.CompanyInfo?.CompanyName || '';
+        if (companyName && !companies.find(c => c.realmId === realm_id)) {
+          companies.unshift({ name: companyName, realmId: realm_id, country: 'CA', current: true });
+        }
+      }
+    } catch(e) {}
+  }
+
+  return {
+    statusCode: 200,
+    headers,
+    body: JSON.stringify({
+      companies,
+      needsManual: companies.length === 0,
+      user: { name: userInfo?.givenname || '', email: userInfo?.email || '' },
+      count: companies.length
+    })
+  };
 };
