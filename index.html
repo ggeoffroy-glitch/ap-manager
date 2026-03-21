@@ -270,7 +270,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
           <option value="90" selected>90 derniers jours</option>
           <option value="180">180 derniers jours</option>
         </select>
-        <button class="btn btn-qbo-ghost btn-sm" onclick="syncQBO()">⟳ Synchroniser QBO</button>
+        <button class="btn btn-qbo-ghost btn-sm" onclick="syncQBO(true)">⟳ Synchroniser QBO</button>
         <button class="btn btn-danger btn-sm" onclick="disconnectQBO()">Déconnecter</button>
       </div>
     </div>
@@ -911,7 +911,7 @@ function closeCompanyPicker() {
 function handleQBOStatusClick() {
   const qbo = currentQBO();
   if (qbo && qbo.access_token) {
-    syncQBO();
+    syncQBO(true);
   } else {
     connectQBO();
   }
@@ -926,10 +926,12 @@ function connectQBO() {
   window.location.href = authUrl;
 }
 
-async function syncQBO() {
+async function syncQBO(userInitiated = false) {
   const qbo = currentQBO();
-  if (!qbo || !qbo.access_token) {
-    showError('QuickBooks n\'est pas connecté pour ce client.');
+
+  // Silent fail if no connection — only show error if user explicitly clicked sync
+  if (!qbo || !qbo.access_token || !qbo.realm_id) {
+    if (userInitiated) showError('QuickBooks n\'est pas connecté pour ce client. Cliquez "Connecter QBO" d\'abord.');
     return;
   }
 
@@ -938,12 +940,17 @@ async function syncQBO() {
 
   try {
     // Auto-refresh token if expired
-    if (Date.now() >= qbo.expires_at - 60000) {
+    if (Date.now() >= (qbo.expires_at - 60000)) {
       await refreshQBOToken();
     }
 
     const daysBack = document.getElementById('qboDaysBack')?.value || 90;
     const freshQBO = currentQBO();
+
+    if (!freshQBO?.access_token || !freshQBO?.realm_id) {
+      if (userInitiated) showError('Token invalide — veuillez reconnecter QuickBooks.');
+      return;
+    }
 
     const res = await fetch(
       `/.netlify/functions/qbo-bills?access_token=${encodeURIComponent(freshQBO.access_token)}&realm_id=${encodeURIComponent(freshQBO.realm_id)}&days_back=${daysBack}`
@@ -952,28 +959,23 @@ async function syncQBO() {
     const data = await res.json();
 
     if (res.status === 401 || data.code === 'TOKEN_EXPIRED') {
-      // Try refresh then retry
       await refreshQBOToken();
-      return syncQBO();
+      return syncQBO(userInitiated);
     }
 
     if (!res.ok) {
-      throw new Error(data.error || 'Erreur lors de la synchronisation');
+      throw new Error(data.error || 'Erreur API QBO');
     }
 
-    // Merge bills: update existing QBO invoices, add new ones
+    // Merge bills
     const existing = currentInvoices();
-    const existingQBOIds = new Set(existing.filter(i => i.qboId).map(i => i.qboId));
-
     let added = 0, updated = 0;
     data.bills.forEach(bill => {
       const idx = existing.findIndex(i => i.qboId === bill.qboId);
       if (idx >= 0) {
-        // Update existing
         existing[idx] = { ...existing[idx], ...bill, id: existing[idx].id };
         updated++;
       } else {
-        // Add new
         existing.push(bill);
         added++;
       }
@@ -984,10 +986,10 @@ async function syncQBO() {
     saveState();
     renderInvTable();
     updateQBOStatus();
-    showSuccess(`Synchronisation QBO réussie — ${added} nouvelles factures, ${updated} mises à jour (${data.count} total).`);
+    showSuccess(`Synchronisation réussie — ${added} nouvelles, ${updated} mises à jour (${data.count} total).`);
 
   } catch(err) {
-    showError('Erreur de synchronisation: ' + err.message);
+    if (userInitiated) showError('Erreur de synchronisation: ' + err.message);
   } finally {
     document.getElementById('uploadLoading').classList.remove('show');
   }
