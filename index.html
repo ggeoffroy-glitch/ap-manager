@@ -917,28 +917,29 @@ async function loadState() {
 }
 
 function saveState() {
-  // Also keep localStorage as backup
+  // Always keep localStorage as backup
   localStorage.setItem('ap_cfo_v3', JSON.stringify({
     clients: state.clients, invoices: state.invoices,
     qboTokens: state.qboTokens, dailyRevenues: state.dailyRevenues
   }));
 
-  // Debounce cloud save — wait 800ms after last change
+  // Debounce cloud save
   if (_saveTimer) clearTimeout(_saveTimer);
   updateSyncStatus('saving');
   _saveTimer = setTimeout(async () => {
     try {
-      await blobSet('ap-state', {
-        clients:    state.clients,
-        invoices:   state.invoices,
-        qboTokens:  state.qboTokens,
+      const result = await blobSet('ap-state', {
+        clients:       state.clients,
+        invoices:      state.invoices,
+        qboTokens:     state.qboTokens,
         dailyRevenues: state.dailyRevenues,
-        lastSaved:  new Date().toISOString()
+        lastSaved:     new Date().toISOString()
       });
-      updateSyncStatus('saved');
+      if (result.fallback) updateSyncStatus('fallback');
+      else updateSyncStatus('saved');
     } catch(e) {
       if (e.message === 'AUTH_FAILED') showLoginScreen();
-      else updateSyncStatus('error');
+      else updateSyncStatus('fallback'); // Degrade gracefully instead of showing error
     }
   }, 800);
 }
@@ -947,10 +948,11 @@ function updateSyncStatus(status) {
   const el = document.getElementById('syncStatus');
   if (!el) return;
   const map = {
-    loaded:  { text: '✓ Synchronisé',   color: 'var(--success)' },
-    saving:  { text: '⟳ Sauvegarde...', color: 'var(--text-muted)' },
-    saved:   { text: '✓ Sauvegardé',    color: 'var(--success)' },
-    error:   { text: '⚠ Erreur sync',   color: 'var(--warning)' },
+    loaded:   { text: '✓ Synchronisé',    color: 'var(--success)'  },
+    saving:   { text: '⟳ Sauvegarde...',  color: 'var(--text-muted)' },
+    saved:    { text: '✓ Sauvegardé',     color: 'var(--success)'  },
+    error:    { text: '⚠ Erreur sync',    color: 'var(--warning)'  },
+    fallback: { text: '○ Local seulement', color: 'var(--text-muted)' },
   };
   const s = map[status] || map.saved;
   el.textContent = s.text;
