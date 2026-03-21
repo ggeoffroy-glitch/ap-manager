@@ -255,6 +255,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <button class="btn btn-ghost btn-sm" onclick="openClientModal()">+ Client</button>
   </div>
   <div class="header-right">
+    <span id="syncStatus" style="font-family:var(--mono);font-size:9px;color:var(--text-muted);transition:color .3s">⟳ Chargement...</span>
+    <button class="btn btn-ghost btn-sm" onclick="pullLatest()" title="Récupérer les dernières données">⟳ Sync</button>
     <div class="qbo-status disconnected" id="qboStatusBadge" onclick="handleQBOStatusClick()">
       <div class="qbo-dot off" id="qboDot"></div>
       <span id="qboStatusText">QBO non connecté</span>
@@ -764,6 +766,26 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   </div>
 </div>
 
+<!-- ════════ LOGIN OVERLAY ════════ -->
+<div id="loginOverlay" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:999;
+  align-items:center;justify-content:center;flex-direction:column;gap:20px">
+  <div style="font-family:var(--serif);font-size:28px;color:var(--accent2);margin-bottom:8px">AP Manager</div>
+  <div style="font-family:var(--mono);font-size:10px;letter-spacing:3px;color:var(--text-muted);text-transform:uppercase;margin-bottom:20px">// CFO Dashboard</div>
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:32px;width:360px">
+    <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--text-muted);margin-bottom:16px">Accès sécurisé</div>
+    <div class="field" style="margin-bottom:14px">
+      <label>Mot de passe</label>
+      <input type="password" id="loginPwd" placeholder="Entrez votre mot de passe"
+        onkeydown="if(event.key==='Enter') submitLogin()"
+        style="background:var(--surface2);border:1px solid var(--border2);border-radius:var(--rs);color:var(--text);font-family:var(--mono);font-size:13px;padding:10px 14px;outline:none;width:100%">
+    </div>
+    <div id="loginError" style="display:none;font-family:var(--mono);font-size:10px;color:var(--danger);margin-bottom:12px;padding:8px 12px;background:var(--danger-bg);border-radius:var(--rs);border:1px solid rgba(224,92,92,.2)"></div>
+    <button class="btn btn-primary" onclick="submitLogin()" style="width:100%;padding:10px;font-size:11px">
+      → Accéder au dashboard
+    </button>
+  </div>
+</div>
+
 <!-- ════════ MODAL CLIENT ════════ -->
 <div class="modal-backdrop" id="clientModal">
   <div class="modal" style="width:500px">
@@ -828,25 +850,165 @@ let cashflowChart = null;
 let currentFileData = null;
 
 // ─── Persist ────────────────────────────────────
-function loadState() {
+// ─── App Password ────────────────────────────────
+let _appPassword = localStorage.getItem('ap_session_pwd') || '';
+
+function getPassword() { return _appPassword; }
+
+function setPassword(pwd) {
+  _appPassword = pwd;
+  localStorage.setItem('ap_session_pwd', pwd); // Remember for session only
+}
+
+// ─── Netlify Blobs API ──────────────────────────
+async function blobGet(key) {
+  const res = await fetch(`/.netlify/functions/data-get?key=${encodeURIComponent(key)}`, {
+    headers: { 'x-app-password': getPassword() }
+  });
+  if (res.status === 401) throw new Error('AUTH_FAILED');
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Erreur lecture données');
+  return data.data; // null if not found
+}
+
+async function blobSet(key, value) {
+  const res = await fetch('/.netlify/functions/data-set', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-app-password': getPassword() },
+    body: JSON.stringify({ key, value })
+  });
+  if (res.status === 401) throw new Error('AUTH_FAILED');
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Erreur écriture données');
+  return data;
+}
+
+// ─── State persistence via Netlify Blobs ─────────
+let _saveTimer = null;
+
+async function loadState() {
   try {
-    const s = localStorage.getItem('ap_cfo_v3');
-    if (s) {
-      const p = JSON.parse(s);
-      state.clients  = p.clients  || [];
-      state.invoices = p.invoices || {};
-      state.qboTokens = p.qboTokens || {};
+    const saved = await blobGet('ap-state');
+    if (saved) {
+      state.clients    = saved.clients    || [];
+      state.invoices   = saved.invoices   || {};
+      state.qboTokens  = saved.qboTokens  || {};
+      state.dailyRevenues = saved.dailyRevenues || {};
     }
-  } catch(e) {}
+  } catch(e) {
+    if (e.message === 'AUTH_FAILED') {
+      showLoginScreen();
+      return;
+    }
+    // Fallback to localStorage if Blobs not available
+    try {
+      const s = localStorage.getItem('ap_cfo_v3');
+      if (s) {
+        const p = JSON.parse(s);
+        state.clients    = p.clients    || [];
+        state.invoices   = p.invoices   || {};
+        state.qboTokens  = p.qboTokens  || {};
+        state.dailyRevenues = p.dailyRevenues || {};
+      }
+    } catch(e2) {}
+  }
   populateClientDropdown();
+  updateSyncStatus('loaded');
 }
 
 function saveState() {
+  // Also keep localStorage as backup
   localStorage.setItem('ap_cfo_v3', JSON.stringify({
-    clients:   state.clients,
-    invoices:  state.invoices,
-    qboTokens: state.qboTokens,
+    clients: state.clients, invoices: state.invoices,
+    qboTokens: state.qboTokens, dailyRevenues: state.dailyRevenues
   }));
+
+  // Debounce cloud save — wait 800ms after last change
+  if (_saveTimer) clearTimeout(_saveTimer);
+  updateSyncStatus('saving');
+  _saveTimer = setTimeout(async () => {
+    try {
+      await blobSet('ap-state', {
+        clients:    state.clients,
+        invoices:   state.invoices,
+        qboTokens:  state.qboTokens,
+        dailyRevenues: state.dailyRevenues,
+        lastSaved:  new Date().toISOString()
+      });
+      updateSyncStatus('saved');
+    } catch(e) {
+      if (e.message === 'AUTH_FAILED') showLoginScreen();
+      else updateSyncStatus('error');
+    }
+  }, 800);
+}
+
+function updateSyncStatus(status) {
+  const el = document.getElementById('syncStatus');
+  if (!el) return;
+  const map = {
+    loaded:  { text: '✓ Synchronisé',   color: 'var(--success)' },
+    saving:  { text: '⟳ Sauvegarde...', color: 'var(--text-muted)' },
+    saved:   { text: '✓ Sauvegardé',    color: 'var(--success)' },
+    error:   { text: '⚠ Erreur sync',   color: 'var(--warning)' },
+  };
+  const s = map[status] || map.saved;
+  el.textContent = s.text;
+  el.style.color = s.color;
+}
+
+// Pull latest from cloud (manual refresh)
+async function pullLatest() {
+  updateSyncStatus('saving');
+  try {
+    const saved = await blobGet('ap-state');
+    if (saved) {
+      state.clients    = saved.clients    || [];
+      state.invoices   = saved.invoices   || {};
+      state.qboTokens  = saved.qboTokens  || {};
+      state.dailyRevenues = saved.dailyRevenues || {};
+      populateClientDropdown();
+      renderInvTable();
+      updateSyncStatus('loaded');
+      showSuccess('Données mises à jour depuis le cloud.');
+    }
+  } catch(e) {
+    if (e.message === 'AUTH_FAILED') showLoginScreen();
+    else updateSyncStatus('error');
+  }
+}
+
+// ─── Login Screen ────────────────────────────────
+function showLoginScreen() {
+  document.getElementById('loginOverlay').style.display = 'flex';
+  document.getElementById('loginPwd').focus();
+}
+
+function hideLoginScreen() {
+  document.getElementById('loginOverlay').style.display = 'none';
+}
+
+async function submitLogin() {
+  const pwd = document.getElementById('loginPwd').value;
+  const errEl = document.getElementById('loginError');
+  errEl.style.display = 'none';
+
+  if (!pwd) { errEl.textContent = 'Entrez le mot de passe.'; errEl.style.display = 'block'; return; }
+
+  setPassword(pwd);
+
+  try {
+    await blobGet('ap-state'); // Test auth
+    hideLoginScreen();
+    await loadState();
+  } catch(e) {
+    if (e.message === 'AUTH_FAILED') {
+      errEl.textContent = 'Mot de passe incorrect.';
+      errEl.style.display = 'block';
+      setPassword('');
+      localStorage.removeItem('ap_session_pwd');
+    }
+  }
 }
 
 // ─── Utilities ──────────────────────────────────
@@ -2237,25 +2399,32 @@ function confirmCSVImport() {
 // ═══════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════
-loadState();
+async function init() {
+  // Set current month for simulation
+  const _now = new Date();
+  const monthEl = document.getElementById('simMonth');
+  if (monthEl) monthEl.value = `${_now.getFullYear()}-${String(_now.getMonth()+1).padStart(2,'0')}`;
 
-// Set current month for simulation
-const _now = new Date();
-document.getElementById('simMonth').value = `${_now.getFullYear()}-${String(_now.getMonth()+1).padStart(2,'0')}`;
+  // Keyboard shortcuts
+  document.getElementById('newClientName').addEventListener('keydown', e => { if(e.key==='Enter') addClient(); });
 
-// Keyboard shortcuts
-document.getElementById('newClientName').addEventListener('keydown', e => { if(e.key==='Enter') addClient(); });
+  // Batch client count updater
+  document.addEventListener('input', e => {
+    if (e.target.id === 'batchClientList') {
+      const count = e.target.value.split('\n').map(n=>n.trim()).filter(n=>n.length>0).length;
+      const el = document.getElementById('batchClientCount');
+      if (el) el.textContent = count > 0 ? `${count} client${count>1?'s':''} détecté${count>1?'s':''}` : '';
+    }
+  });
 
-// Batch client count updater
-document.addEventListener('input', e => {
-  if (e.target.id === 'batchClientList') {
-    const count = e.target.value.split('\n').map(n=>n.trim()).filter(n=>n.length>0).length;
-    const el = document.getElementById('batchClientCount');
-    if (el) el.textContent = count > 0 ? `${count} client${count>1?'s':''} détecté${count>1?'s':''}` : '';
-  }
-});
+  // Check if APP_PASSWORD is set — if not, skip login
+  // Try loading state — will show login if auth fails
+  await loadState();
 
-handleOAuthCallback(); // Process QBO OAuth redirect if present
+  handleOAuthCallback(); // Process QBO OAuth redirect if present
+}
+
+init();
 </script>
 </body>
 </html>
