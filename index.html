@@ -230,6 +230,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <option value="">— Sélectionner un client —</option>
     </select>
     <button class="btn btn-ghost btn-sm" onclick="openClientModal()">+ Client</button>
+    <button class="btn btn-qbo-ghost btn-sm" onclick="importQBOClients()">⟳ Importer clients QBO</button>
   </div>
   <div class="header-right">
     <div class="qbo-status disconnected" id="qboStatusBadge" onclick="handleQBOStatusClick()">
@@ -544,6 +545,48 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
             <tr><td colspan="8" class="empty-state">Configurer la simulation</td></tr>
           </tbody>
         </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════ MODAL: IMPORT QBO CLIENTS ════════ -->
+<div class="modal-backdrop" id="qboImportModal">
+  <div class="modal" style="width:560px">
+    <div class="modal-title">Importer les clients depuis QBO</div>
+    <div id="qboImportLoading" style="text-align:center;padding:30px;font-family:var(--mono);font-size:10px;color:var(--text-muted);display:none">
+      <div class="spinner" style="margin:0 auto 14px"></div>
+      Récupération de vos clients QuickBooks...
+    </div>
+    <div id="qboImportContent" style="display:none">
+      <p style="font-family:var(--mono);font-size:10px;color:var(--text-muted);margin-bottom:14px;letter-spacing:0.5px">
+        Sélectionnez les clients à ajouter à votre dashboard:
+      </p>
+      <div style="max-height:320px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--rs);margin-bottom:16px" id="qboClientCheckList"></div>
+      <div style="display:flex;gap:9px;justify-content:space-between;align-items:center">
+        <button class="btn btn-ghost btn-sm" onclick="toggleAllQBOClients()">Tout sélectionner</button>
+        <div style="display:flex;gap:9px">
+          <button class="btn btn-ghost" onclick="closeQBOImportModal()">Annuler</button>
+          <button class="btn btn-qbo" onclick="confirmQBOImport()">✓ Importer la sélection</button>
+        </div>
+      </div>
+    </div>
+    <div id="qboImportError" style="display:none">
+      <div class="alert-bar alert-warning show" style="margin-bottom:16px">
+        <span>⚠</span>
+        <span id="qboImportErrorMsg"></span>
+      </div>
+      <p style="font-family:var(--mono);font-size:10px;color:var(--text-muted);margin-bottom:16px;line-height:1.7">
+        L'API QBO Accountant ne retourne pas la liste de clients directement.<br>
+        Vous pouvez les ajouter manuellement ou coller une liste de noms ci-dessous:
+      </p>
+      <div class="field" style="margin-bottom:14px">
+        <label>Noms des clients (un par ligne)</label>
+        <textarea id="manualClientList" style="min-height:140px;background:var(--surface2);border:1px solid var(--border2);border-radius:var(--rs);color:var(--text);font-family:var(--mono);font-size:11px;padding:10px 12px;outline:none;width:100%;resize:vertical" placeholder="Boutique XYZ inc.&#10;Restaurant ABC ltée&#10;Garage Tremblay inc.&#10;..."></textarea>
+      </div>
+      <div style="display:flex;gap:9px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="closeQBOImportModal()">Annuler</button>
+        <button class="btn btn-primary" onclick="importManualClients()">✓ Importer</button>
       </div>
     </div>
   </div>
@@ -1254,6 +1297,136 @@ function exportInvoices() {
   a.href='data:text/csv;charset=utf-8,\uFEFF'+encodeURIComponent(csv);
   a.download=`AP_${(state.currentClient||'export').replace(/\s+/g,'_')}_${today()}.csv`;
   a.click();
+}
+
+// ═══════════════════════════════════════════════
+// QBO CLIENT IMPORT
+// ═══════════════════════════════════════════════
+let qboImportCandidates = []; // companies fetched from QBO
+
+async function importQBOClients() {
+  // We need a valid access token — use any existing QBO connection
+  const anyToken = Object.values(state.qboTokens).find(t => t?.access_token);
+
+  if (!anyToken) {
+    // No existing connection — need to auth first with a temp client
+    showError('Connectez d\'abord QuickBooks pour un client, puis utilisez ce bouton pour importer tous vos clients.');
+    return;
+  }
+
+  // Open modal and show loading
+  document.getElementById('qboImportModal').classList.add('open');
+  document.getElementById('qboImportLoading').style.display = 'block';
+  document.getElementById('qboImportContent').style.display = 'none';
+  document.getElementById('qboImportError').style.display = 'none';
+
+  try {
+    // Auto-refresh if needed
+    const clientWithToken = Object.keys(state.qboTokens).find(c => state.qboTokens[c]?.access_token);
+    if (clientWithToken && Date.now() >= state.qboTokens[clientWithToken].expires_at - 60000) {
+      const prev = state.currentClient;
+      state.currentClient = clientWithToken;
+      await refreshQBOToken();
+      state.currentClient = prev;
+    }
+
+    const freshToken = Object.values(state.qboTokens).find(t => t?.access_token);
+
+    const res = await fetch(
+      `/.netlify/functions/qbo-companies?access_token=${encodeURIComponent(freshToken.access_token)}`
+    );
+
+    const data = await res.json();
+
+    if (res.status === 401 || data.code === 'TOKEN_EXPIRED') {
+      throw new Error('TOKEN_EXPIRED');
+    }
+
+    if (!res.ok) throw new Error(data.error || 'Erreur API');
+
+    if (data.companies && data.companies.length > 0) {
+      qboImportCandidates = data.companies.map(c => ({ ...c, selected: true }));
+      renderQBOClientList();
+      document.getElementById('qboImportLoading').style.display = 'none';
+      document.getElementById('qboImportContent').style.display = 'block';
+    } else {
+      throw new Error('NO_COMPANIES');
+    }
+
+  } catch (err) {
+    document.getElementById('qboImportLoading').style.display = 'none';
+    document.getElementById('qboImportError').style.display = 'block';
+
+    if (err.message === 'TOKEN_EXPIRED') {
+      document.getElementById('qboImportErrorMsg').textContent = 'Session expirée. Reconnectez QBO et réessayez.';
+    } else {
+      document.getElementById('qboImportErrorMsg').textContent =
+        'L\'API QBO Accountant n\'a pas retourné la liste. Utilisez l\'import manuel ci-dessous.';
+    }
+  }
+}
+
+function renderQBOClientList() {
+  const list = document.getElementById('qboClientCheckList');
+  list.innerHTML = qboImportCandidates.map((c, i) => {
+    const alreadyExists = state.clients.find(cl => cl.name === c.name);
+    return `<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid rgba(37,44,61,.5)">
+      <input type="checkbox" style="accent-color:var(--accent);width:15px;height:15px;flex-shrink:0"
+        ${c.selected ? 'checked' : ''} ${alreadyExists ? 'disabled' : ''}
+        onchange="qboImportCandidates[${i}].selected=this.checked">
+      <div style="flex:1">
+        <div style="font-size:12px;font-weight:500;color:${alreadyExists ? 'var(--text-muted)' : 'var(--text)'}">
+          ${c.name} ${alreadyExists ? '<span style="font-family:var(--mono);font-size:9px;color:var(--success)">✓ Déjà importé</span>' : ''}
+        </div>
+        ${c.realmId ? `<div style="font-family:var(--mono);font-size:9px;color:var(--text-muted)">Realm ID: ${c.realmId}</div>` : ''}
+      </div>
+      <span style="font-family:var(--mono);font-size:9px;padding:2px 7px;border-radius:3px;
+        background:var(--qbo-bg);color:var(--qbo);border:1px solid rgba(44,160,28,.25)">QBO</span>
+    </div>`;
+  }).join('');
+}
+
+function toggleAllQBOClients() {
+  const allSelected = qboImportCandidates.every(c => c.selected);
+  qboImportCandidates.forEach(c => c.selected = !allSelected);
+  renderQBOClientList();
+}
+
+function confirmQBOImport() {
+  const toImport = qboImportCandidates.filter(c => c.selected && !state.clients.find(cl => cl.name === c.name));
+  let added = 0;
+  toImport.forEach(c => {
+    state.clients.push({ name: c.name, neq: '', qboRealmId: c.realmId || '' });
+    if (!state.invoices[c.name]) state.invoices[c.name] = [];
+    added++;
+  });
+  saveState();
+  populateClientDropdown();
+  closeQBOImportModal();
+  showSuccess(`${added} client${added > 1 ? 's' : ''} importé${added > 1 ? 's' : ''} depuis QuickBooks.`);
+}
+
+function importManualClients() {
+  const raw = document.getElementById('manualClientList').value.trim();
+  if (!raw) { alert('Entrez au moins un nom de client.'); return; }
+  const names = raw.split('\n').map(n => n.trim()).filter(n => n.length > 0);
+  let added = 0;
+  names.forEach(name => {
+    if (!state.clients.find(c => c.name === name)) {
+      state.clients.push({ name, neq: '' });
+      if (!state.invoices[name]) state.invoices[name] = [];
+      added++;
+    }
+  });
+  saveState();
+  populateClientDropdown();
+  closeQBOImportModal();
+  showSuccess(`${added} client${added > 1 ? 's' : ''} ajouté${added > 1 ? 's' : ''} avec succès.`);
+}
+
+function closeQBOImportModal() {
+  document.getElementById('qboImportModal').classList.remove('open');
+  qboImportCandidates = [];
 }
 
 // ═══════════════════════════════════════════════
