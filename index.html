@@ -188,6 +188,29 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
   color:var(--text);font-family:var(--mono);font-size:10px;padding:3px 7px;outline:none}
 .chart-container{position:relative;height:265px;padding:4px}
 .cf-tbl-wrap{max-height:290px;overflow-y:auto}
+
+/* ── CALENDAR ── */
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
+.cal-day-header{font-family:var(--mono);font-size:9px;text-align:center;color:var(--text-muted);
+  padding:4px 0;letter-spacing:1px;text-transform:uppercase}
+.cal-day{background:var(--surface2);border:1px solid var(--border);border-radius:4px;
+  min-height:80px;padding:5px;cursor:pointer;transition:all .15s;position:relative}
+.cal-day:hover{border-color:var(--accent);background:rgba(201,168,76,.06)}
+.cal-day.today{border-color:var(--accent);background:rgba(201,168,76,.08)}
+.cal-day.other-month{opacity:.35}
+.cal-day.has-invoice{border-color:rgba(224,92,92,.4)}
+.cal-day.low-balance{background:rgba(224,92,92,.08)}
+.cal-day-num{font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-bottom:3px;
+  display:flex;align-items:center;justify-content:space-between}
+.cal-day-num.today-num{color:var(--accent2);font-weight:500}
+.cal-rev-input{width:100%;background:transparent;border:none;border-bottom:1px solid var(--border2);
+  color:var(--info);font-family:var(--mono);font-size:10px;padding:2px 0;outline:none;text-align:right}
+.cal-rev-input:focus{border-bottom-color:var(--accent)}
+.cal-inv-chip{font-family:var(--mono);font-size:8px;padding:1px 5px;border-radius:2px;
+  margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.cal-inv-chip.unpaid{background:rgba(224,92,92,.15);color:var(--danger)}
+.cal-inv-chip.paid{background:rgba(76,175,125,.12);color:var(--success)}
+.cal-balance{font-family:var(--mono);font-size:9px;margin-top:3px;text-align:right}
 .cf-tbl{width:100%;border-collapse:collapse;font-size:11px}
 .cf-tbl th{font-family:var(--mono);font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--text-muted);
   padding:8px 11px;text-align:right;border-bottom:1px solid var(--border);white-space:nowrap}
@@ -230,7 +253,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       <option value="">— Sélectionner un client —</option>
     </select>
     <button class="btn btn-ghost btn-sm" onclick="openClientModal()">+ Client</button>
-    <button class="btn btn-qbo-ghost btn-sm" onclick="importQBOClients()">⟳ Importer clients QBO</button>
   </div>
   <div class="header-right">
     <div class="qbo-status disconnected" id="qboStatusBadge" onclick="handleQBOStatusClick()">
@@ -275,7 +297,15 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
       </div>
     </div>
 
-    <div class="p1-grid">
+    <!-- Import CSV Banner -->
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:11px 18px;
+      background:var(--surface2);border:1px solid var(--border);border-radius:var(--rs);margin-bottom:16px">
+      <div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--text);letter-spacing:0.5px">📊 Import CSV — Factures en lot</div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-muted);margin-top:3px">Importez plusieurs factures déjà classifiées depuis un fichier CSV (QBO, Dext, Excel, etc.)</div>
+      </div>
+      <button class="btn btn-ghost" onclick="openCSVImport()">↑ Importer CSV</button>
+    </div>
 
       <!-- LEFT: Upload -->
       <div style="display:flex;flex-direction:column;gap:14px">
@@ -415,26 +445,36 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
         <div style="display:flex;gap:8px;align-items:center">
           <select id="filterSt" style="background:var(--surface2);border:1px solid var(--border);border-radius:3px;
             color:var(--text);font-family:var(--mono);font-size:10px;padding:5px 9px;outline:none" onchange="renderInvTable()">
-            <option value="">Tous</option>
+            <option value="">Tous les statuts</option>
             <option value="overdue">En retard</option>
             <option value="due-soon">Dû bientôt</option>
             <option value="upcoming">À venir</option>
             <option value="paid">Payé</option>
           </select>
+          <select id="filterGL" style="background:var(--surface2);border:1px solid var(--border);border-radius:3px;
+            color:var(--text);font-family:var(--mono);font-size:10px;padding:5px 9px;outline:none" onchange="renderInvTable()">
+            <option value="">Tous les comptes GL</option>
+          </select>
         </div>
       </div>
       <div class="tbl-wrap">
-        <table class="data-tbl">
+        <table class="data-tbl" id="invTable">
           <thead>
             <tr>
-              <th>Fournisseur</th><th>N° Facture</th><th>Date</th><th>Échéance</th>
-              <th>Compte GL</th><th>Description</th>
-              <th>Sous-total</th><th>TPS</th><th>TVQ</th><th>Total</th>
-              <th>Source</th><th>Statut</th><th>Actions</th>
+              <th onclick="sortTable('vendor')" style="cursor:pointer">Fournisseur <span id="sort_vendor"></span></th>
+              <th onclick="sortTable('invoiceNum')" style="cursor:pointer">N° Facture <span id="sort_invoiceNum"></span></th>
+              <th onclick="sortTable('invDate')" style="cursor:pointer">Date <span id="sort_invDate"></span></th>
+              <th onclick="sortTable('dueDate')" style="cursor:pointer">Échéance <span id="sort_dueDate"></span></th>
+              <th onclick="sortTable('glCode')" style="cursor:pointer">Compte GL <span id="sort_glCode"></span></th>
+              <th>Description</th>
+              <th onclick="sortTable('total')" style="cursor:pointer">Total <span id="sort_total"></span></th>
+              <th>Source</th>
+              <th onclick="sortTable('status')" style="cursor:pointer">Statut <span id="sort_status"></span></th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody id="invTableBody">
-            <tr><td colspan="13" class="empty-state">Aucune facture — téléversez ou synchronisez QBO</td></tr>
+            <tr><td colspan="10" class="empty-state">Aucune facture — téléversez, importez CSV ou synchronisez QBO</td></tr>
           </tbody>
         </table>
       </div>
@@ -445,50 +485,45 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   <div class="tab-panel" id="tab-simulation">
     <div class="sim-config-panel">
       <div style="font-family:var(--mono);font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--accent2);margin-bottom:14px">Configuration de la simulation</div>
-      <div class="sim-config-grid">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr) auto;gap:16px;align-items:end">
         <div class="field">
-          <label>Date de début</label>
-          <input type="date" id="simStartDate">
+          <label>Mois affiché</label>
+          <input type="month" id="simMonth" oninput="renderCalendar()">
         </div>
         <div class="field">
           <label>Balance d'ouverture ($)</label>
           <input type="number" id="simOpenBal" value="50000" step="100" oninput="runSimulation()">
         </div>
         <div class="field">
-          <label>Revenus journaliers ($)</label>
-          <input type="number" id="simDailyRev" value="3000" step="100" oninput="runSimulation()">
+          <label>Revenu journalier par défaut ($)</label>
+          <input type="number" id="simDailyRev" value="3000" step="100" oninput="applyDefaultRevenue()">
         </div>
         <div class="field">
           <label>Croissance mensuelle (%)</label>
-          <div class="range-row">
-            <input type="range" id="simGrowth" min="-20" max="30" value="0" step="0.5"
-              oninput="document.getElementById('simGrowthVal').textContent=this.value+'%';runSimulation()">
-            <span class="range-val" id="simGrowthVal">0%</span>
-          </div>
+          <input type="number" id="simGrowth" value="0" step="0.5" min="-50" max="100"
+            placeholder="Ex: 5" oninput="runSimulation()"
+            style="background:var(--surface2);border:1px solid var(--border2);border-radius:var(--rs);color:var(--accent2);font-family:var(--mono);font-size:12px;padding:7px 11px;outline:none;width:100%">
         </div>
         <div class="field">
-          <label>Période</label>
-          <div class="period-btns">
-            <button class="period-btn active" onclick="setPeriod(30,this)">30j</button>
-            <button class="period-btn" onclick="setPeriod(60,this)">60j</button>
-            <button class="period-btn" onclick="setPeriod(90,this)">90j</button>
-            <button class="period-btn" onclick="setPeriod(180,this)">180j</button>
-          </div>
+          <label>Seuil d'alerte ($)</label>
+          <input type="number" id="simThreshold" value="10000" step="500" oninput="runSimulation()">
         </div>
       </div>
       <div class="divider" style="margin:13px 0"></div>
-      <div style="display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center">
-        <div class="field">
-          <label>Seuil d'alerte de liquidité ($)</label>
-          <input type="number" id="simThreshold" value="10000" step="500" oninput="runSimulation()" style="max-width:190px">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-muted)">
+          💡 Cliquez sur un jour du calendrier pour modifier son revenu individuellement
         </div>
-        <button class="btn btn-primary" onclick="runSimulation()">⟳ Actualiser</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="resetDailyRevenues()">↺ Réinitialiser revenus</button>
+          <button class="btn btn-primary" onclick="runSimulation()">⟳ Actualiser</button>
+        </div>
       </div>
     </div>
 
     <div class="kpi-grid">
       <div class="kpi-card gold"><div class="kpi-label">Balance d'ouverture</div><div class="kpi-val" id="kpiOpen">—</div></div>
-      <div class="kpi-card blue"><div class="kpi-label">Revenus projetés</div><div class="kpi-val" id="kpiRevenue">—</div></div>
+      <div class="kpi-card blue"><div class="kpi-label">Revenus du mois</div><div class="kpi-val" id="kpiRevenue">—</div></div>
       <div class="kpi-card red"><div class="kpi-label">Décaissements AP</div><div class="kpi-val" id="kpiPayments">—</div></div>
       <div class="kpi-card orange">
         <div class="kpi-label">Solde minimum</div>
@@ -502,35 +537,51 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
     <div class="alert-bar alert-warning" id="simAlertWarn"><span>⚠</span><span id="simAlertWarnMsg"></span></div>
     <div class="alert-bar alert-success" id="simAlertOk"><span>✓</span><span id="simAlertOkMsg"></span></div>
 
-    <div class="p2-grid">
+    <!-- Calendar + Invoice Selector side by side -->
+    <div style="display:grid;grid-template-columns:1fr 280px;gap:18px;margin-bottom:20px">
+
+      <!-- Calendar -->
       <div class="panel">
         <div class="panel-hd">
-          <span class="panel-title">Factures à inclure</span>
-          <button class="btn btn-ghost btn-sm" onclick="toggleAllInvoices()">Tout sél.</button>
-        </div>
-        <div id="invSelectorList" style="max-height:310px;overflow-y:auto">
-          <div class="empty-state">Aucune facture non payée</div>
-        </div>
-      </div>
-      <div class="panel">
-        <div class="panel-hd">
-          <span class="panel-title">Projection du solde bancaire</span>
-          <div style="display:flex;gap:12px">
-            <div style="display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:9px;color:var(--text-muted)">
-              <div style="width:12px;height:2px;background:var(--accent)"></div>Solde
-            </div>
-            <div style="display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:9px;color:var(--text-muted)">
-              <div style="width:12px;height:2px;border-top:2px dashed var(--danger)"></div>Seuil
-            </div>
+          <div style="display:flex;align-items:center;gap:12px">
+            <button class="btn btn-ghost btn-sm" onclick="changeCalMonth(-1)">◀</button>
+            <span class="panel-title" id="calMonthLabel" style="font-size:11px"></span>
+            <button class="btn btn-ghost btn-sm" onclick="changeCalMonth(1)">▶</button>
+          </div>
+          <div style="display:flex;gap:14px;font-family:var(--mono);font-size:9px">
+            <span style="color:var(--info)">● Revenu</span>
+            <span style="color:var(--danger)">● Facture due</span>
+            <span style="color:var(--success)">● Payé</span>
+            <span style="color:var(--warning)">● Seuil bas</span>
           </div>
         </div>
-        <div class="panel-body"><div class="chart-container"><canvas id="cashflowChart"></canvas></div></div>
+        <div class="panel-body" style="padding:12px">
+          <div id="calendarGrid"></div>
+        </div>
+      </div>
+
+      <!-- Invoice selector -->
+      <div class="panel">
+        <div class="panel-hd">
+          <span class="panel-title">Factures</span>
+          <button class="btn btn-ghost btn-sm" onclick="toggleAllInvoices()">Tout sél.</button>
+        </div>
+        <div id="invSelectorList" style="max-height:480px;overflow-y:auto">
+          <div class="empty-state">Aucune facture</div>
+        </div>
       </div>
     </div>
 
+    <!-- Projection Table - ALL invoices including paid (for backtracking) -->
     <div class="panel">
       <div class="panel-hd">
-        <span class="panel-title">Tableau de projection — événements de décaissement</span>
+        <span class="panel-title">Journal de projection — tous les événements</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <label style="font-family:var(--mono);font-size:9px;color:var(--text-muted);display:flex;align-items:center;gap:5px;cursor:pointer">
+            <input type="checkbox" id="showPaidInProj" checked onchange="runSimulation()" style="accent-color:var(--accent)">
+            Inclure factures payées
+          </label>
+        </div>
       </div>
       <div class="cf-tbl-wrap">
         <table class="cf-tbl">
@@ -545,6 +596,78 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
             <tr><td colspan="8" class="empty-state">Configurer la simulation</td></tr>
           </tbody>
         </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════ MODAL: CSV IMPORT ════════ -->
+<div class="modal-backdrop" id="csvImportModal">
+  <div class="modal" style="width:780px;max-height:90vh;overflow-y:auto">
+    <div class="modal-title">Import CSV — Factures en lot</div>
+
+    <!-- Step 1: Upload CSV -->
+    <div id="csvStep1">
+      <p style="font-family:var(--mono);font-size:10px;color:var(--text-muted);margin-bottom:16px;line-height:1.8">
+        Formats acceptés: exports QBO, Dext, Excel (sauvegardé en .csv), ou tout autre CSV.<br>
+        La première ligne doit contenir les en-têtes de colonnes.
+      </p>
+      <div class="upload-zone" id="csvUploadZone" style="padding:28px;position:relative">
+        <input type="file" id="csvFileInput" accept=".csv,.txt" onchange="handleCSVFile(this.files[0])" style="position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%">
+        <span class="upload-icon" style="font-size:28px">📊</span>
+        <div class="upload-title">Glisser-déposer votre CSV ici</div>
+        <div class="upload-sub">ou cliquer pour sélectionner — .CSV · .TXT</div>
+      </div>
+      <div style="margin-top:14px">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text-muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Exemple de format attendu</div>
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--rs);padding:10px 14px;font-family:var(--mono);font-size:10px;color:var(--text-muted);line-height:1.8;overflow-x:auto;white-space:nowrap">
+          Fournisseur,N° Facture,Date Facture,Date Échéance,Montant,TPS,TVQ,Total,Description<br>
+          Bell Canada,INV-001,2024-09-01,2024-10-01,100.00,5.00,9.98,114.98,Téléphonie<br>
+          Hydro-Québec,INV-002,2024-09-05,2024-10-05,250.00,12.50,24.94,287.44,Électricité
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:16px">
+        <button class="btn btn-ghost" onclick="closeCSVImport()">Annuler</button>
+      </div>
+    </div>
+
+    <!-- Step 2: Column Mapping -->
+    <div id="csvStep2" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div style="font-family:var(--mono);font-size:10px;color:var(--text-dim)">
+          <span id="csvFileName" style="color:var(--accent2)"></span> — 
+          <span id="csvRowCount"></span> lignes détectées
+        </div>
+        <button class="btn btn-ghost btn-sm" onclick="resetCSVImport()">← Changer de fichier</button>
+      </div>
+
+      <div style="font-family:var(--mono);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-muted);margin-bottom:10px">
+        Associer les colonnes de votre CSV
+      </div>
+
+      <div id="csvMappingGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px"></div>
+
+      <div class="divider"></div>
+
+      <!-- Preview table -->
+      <div style="font-family:var(--mono);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text-muted);margin-bottom:8px">
+        Aperçu — 5 premières lignes
+      </div>
+      <div style="overflow-x:auto;margin-bottom:16px;max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--rs)">
+        <table class="data-tbl" id="csvPreviewTable" style="font-size:10px">
+          <thead id="csvPreviewHead"></thead>
+          <tbody id="csvPreviewBody"></tbody>
+        </table>
+      </div>
+
+      <div style="display:flex;gap:10px;justify-content:space-between;align-items:center">
+        <div style="font-family:var(--mono);font-size:10px;color:var(--text-muted)">
+          <span id="csvImportCount" style="color:var(--accent2);font-weight:500"></span> factures prêtes à importer
+        </div>
+        <div style="display:flex;gap:9px">
+          <button class="btn btn-ghost" onclick="closeCSVImport()">Annuler</button>
+          <button class="btn btn-success" onclick="confirmCSVImport()">✓ Importer toutes les factures</button>
+        </div>
       </div>
     </div>
   </div>
@@ -643,19 +766,43 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 
 <!-- ════════ MODAL CLIENT ════════ -->
 <div class="modal-backdrop" id="clientModal">
-  <div class="modal">
-    <div class="modal-title">Ajouter un client</div>
-    <div class="field" style="margin-bottom:14px">
-      <label>Nom de l'entreprise *</label>
-      <input type="text" id="newClientName" placeholder="Ex: Boutique XYZ inc.">
+  <div class="modal" style="width:500px">
+    <div class="modal-title">Ajouter des clients</div>
+
+    <!-- Tabs inside modal -->
+    <div style="display:flex;gap:4px;margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:0">
+      <button class="tab-btn active" id="clientTabSingle" onclick="switchClientTab('single')" style="padding:8px 16px;font-size:9px">Client unique</button>
+      <button class="tab-btn" id="clientTabBatch" onclick="switchClientTab('batch')" style="padding:8px 16px;font-size:9px">Import multiple</button>
     </div>
-    <div class="field" style="margin-bottom:18px">
-      <label>NEQ / Numéro d'entreprise</label>
-      <input type="text" id="newClientNEQ" placeholder="Ex: 1234567890">
+
+    <!-- Single client -->
+    <div id="clientPanelSingle">
+      <div class="field" style="margin-bottom:16px">
+        <label>Nom de l'entreprise *</label>
+        <input type="text" id="newClientName" placeholder="Ex: 9544-0483 Quebec Inc. (Parma Cafe)">
+      </div>
+      <div style="display:flex;gap:9px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="closeClientModal()">Annuler</button>
+        <button class="btn btn-primary" onclick="addClient()">✓ Créer</button>
+      </div>
     </div>
-    <div style="display:flex;gap:9px;justify-content:flex-end">
-      <button class="btn btn-ghost" onclick="closeClientModal()">Annuler</button>
-      <button class="btn btn-primary" onclick="addClient()">Créer</button>
+
+    <!-- Batch import -->
+    <div id="clientPanelBatch" style="display:none">
+      <p style="font-family:var(--mono);font-size:9px;color:var(--text-muted);margin-bottom:10px;line-height:1.7">
+        Entrez un nom de client par ligne. Ils seront tous créés en une seule fois.
+      </p>
+      <div class="field" style="margin-bottom:16px">
+        <label>Liste de clients (un par ligne)</label>
+        <textarea id="batchClientList" placeholder="9544-0483 Quebec Inc. (Parma Cafe)&#10;Restaurant ABC ltée&#10;Boutique XYZ inc.&#10;Garage Tremblay inc." style="min-height:180px;background:var(--surface2);border:1px solid var(--border2);border-radius:var(--rs);color:var(--text);font-family:var(--mono);font-size:11px;padding:10px 12px;outline:none;width:100%;resize:vertical;line-height:1.8"></textarea>
+      </div>
+      <div style="display:flex;gap:9px;justify-content:space-between;align-items:center">
+        <span id="batchClientCount" style="font-family:var(--mono);font-size:10px;color:var(--text-muted)"></span>
+        <div style="display:flex;gap:9px">
+          <button class="btn btn-ghost" onclick="closeClientModal()">Annuler</button>
+          <button class="btn btn-primary" onclick="addBatchClients()">✓ Importer tous</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -668,11 +815,14 @@ let state = {
   clients: [],
   currentClient: null,
   invoices: {},
-  qboTokens: {},      // per client: { access_token, refresh_token, realm_id, expires_at, last_sync }
-  simPeriod: 30,
+  qboTokens: {},
   simSelected: {},
   simPayDates: {},
+  dailyRevenues: {},  // key: "YYYY-MM-DD" → revenue amount
+  simCalMonth: null,  // "YYYY-MM"
 };
+
+let sortState = { col: 'dueDate', dir: 'asc' };
 
 let cashflowChart = null;
 let currentFileData = null;
@@ -1067,14 +1217,30 @@ function switchClient() {
   renderInvSelector();
 }
 
-function openClientModal()  { document.getElementById('clientModal').classList.add('open'); setTimeout(()=>document.getElementById('newClientName').focus(),50); }
-function closeClientModal() { document.getElementById('clientModal').classList.remove('open'); document.getElementById('newClientName').value=''; document.getElementById('newClientNEQ').value=''; }
+function openClientModal() {
+  document.getElementById('clientModal').classList.add('open');
+  switchClientTab('single');
+  setTimeout(() => document.getElementById('newClientName').focus(), 50);
+}
+
+function closeClientModal() {
+  document.getElementById('clientModal').classList.remove('open');
+  document.getElementById('newClientName').value = '';
+  if (document.getElementById('batchClientList')) document.getElementById('batchClientList').value = '';
+}
+
+function switchClientTab(tab) {
+  document.getElementById('clientTabSingle').classList.toggle('active', tab === 'single');
+  document.getElementById('clientTabBatch').classList.toggle('active', tab === 'batch');
+  document.getElementById('clientPanelSingle').style.display = tab === 'single' ? 'block' : 'none';
+  document.getElementById('clientPanelBatch').style.display = tab === 'batch' ? 'block' : 'none';
+}
 
 function addClient() {
   const name = document.getElementById('newClientName').value.trim();
   if (!name) { alert('Entrez le nom de l\'entreprise.'); return; }
   if (state.clients.find(c => c.name === name)) { alert('Ce client existe déjà.'); return; }
-  state.clients.push({ name, neq: document.getElementById('newClientNEQ').value.trim() });
+  state.clients.push({ name });
   state.invoices[name] = [];
   saveState();
   populateClientDropdown();
@@ -1083,13 +1249,43 @@ function addClient() {
   closeClientModal();
 }
 
+function addBatchClients() {
+  const raw = document.getElementById('batchClientList').value.trim();
+  if (!raw) { alert('Entrez au moins un nom de client.'); return; }
+  const names = raw.split('\n').map(n => n.trim()).filter(n => n.length > 0);
+  let added = 0;
+  names.forEach(name => {
+    if (!state.clients.find(c => c.name === name)) {
+      state.clients.push({ name });
+      state.invoices[name] = [];
+      added++;
+    }
+  });
+  saveState();
+  populateClientDropdown();
+  if (added > 0) {
+    document.getElementById('clientSelect').value = names[names.length - 1];
+    switchClient();
+  }
+  closeClientModal();
+  showSuccess(`${added} client${added > 1 ? 's' : ''} ajouté${added > 1 ? 's' : ''} avec succès.`);
+}
+
 // ═══════════════════════════════════════════════
 // TABS
 // ═══════════════════════════════════════════════
 function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach((b,i) => b.classList.toggle('active',['invoices','simulation'][i]===name));
   document.querySelectorAll('.tab-panel').forEach((p,i) => p.classList.toggle('active',['invoices','simulation'][i]===name));
-  if (name==='simulation') { document.getElementById('simStartDate').value=today(); renderInvSelector(); runSimulation(); }
+  if (name === 'simulation') {
+    const now = new Date();
+    const monthEl = document.getElementById('simMonth');
+    if (monthEl && !monthEl.value) {
+      monthEl.value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    }
+    renderInvSelector();
+    runSimulation();
+  }
 }
 
 // ═══════════════════════════════════════════════
@@ -1262,37 +1458,85 @@ function deleteInvoice(id) {
 }
 
 // ═══════════════════════════════════════════════
-// RENDER TABLE
+// SORT TABLE
+// ═══════════════════════════════════════════════
+function sortTable(col) {
+  if (sortState.col === col) {
+    sortState.dir = sortState.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortState.col = col;
+    sortState.dir = 'asc';
+  }
+  // Update sort indicators
+  document.querySelectorAll('[id^="sort_"]').forEach(el => el.textContent = '');
+  const el = document.getElementById('sort_' + col);
+  if (el) el.textContent = sortState.dir === 'asc' ? ' ↑' : ' ↓';
+  renderInvTable();
+}
+
+// ═══════════════════════════════════════════════
+// RENDER INVOICE TABLE
 // ═══════════════════════════════════════════════
 function renderInvTable() {
-  const tbody=document.getElementById('invTableBody');
-  const filter=document.getElementById('filterSt').value;
-  let invs=currentInvoices();
-  if (filter) invs=invs.filter(i=>getInvStatus(i)===filter);
-  const ord={overdue:0,'due-soon':1,upcoming:2,paid:3};
-  invs.sort((a,b)=>ord[getInvStatus(a)]-ord[getInvStatus(b)]||new Date(a.dueDate)-new Date(b.dueDate));
-  if (!invs.length) { tbody.innerHTML=`<tr><td colspan="13" class="empty-state">Aucune facture</td></tr>`; return; }
-  const t=new Date(); t.setHours(0,0,0,0);
-  tbody.innerHTML=invs.map(inv=>{
-    const st=getInvStatus(inv);
-    const diff=Math.ceil((new Date(inv.dueDate)-t)/86400000);
-    const diffTxt=st==='paid'?'':st==='overdue'?`<br><span style="color:var(--danger);font-size:9px">${Math.abs(diff)}j retard</span>`:`<br><span style="color:var(--text-muted);font-size:9px">dans ${diff}j</span>`;
-    const srcBadge=inv.source==='quickbooks'?`<span class="badge badge-qbo">QBO</span>`:`<span class="badge" style="background:rgba(91,141,238,.1);color:var(--info);border:1px solid rgba(91,141,238,.2)">Manuel</span>`;
+  const tbody = document.getElementById('invTableBody');
+  const filterSt = document.getElementById('filterSt')?.value || '';
+  const filterGL = document.getElementById('filterGL')?.value || '';
+  let invs = currentInvoices();
+
+  // Update GL filter dropdown
+  const glSel = document.getElementById('filterGL');
+  if (glSel) {
+    const currentGL = glSel.value;
+    const glCodes = [...new Set(invs.map(i => i.glCode).filter(Boolean))].sort();
+    glSel.innerHTML = '<option value="">Tous les comptes GL</option>' +
+      glCodes.map(code => {
+        const inv = invs.find(i => i.glCode === code);
+        return `<option value="${code}" ${code === currentGL ? 'selected' : ''}>${code} — ${inv?.glNom || ''}</option>`;
+      }).join('');
+  }
+
+  if (filterSt) invs = invs.filter(i => getInvStatus(i) === filterSt);
+  if (filterGL) invs = invs.filter(i => i.glCode === filterGL);
+
+  // Sort
+  const { col, dir } = sortState;
+  invs.sort((a, b) => {
+    let va = col === 'status' ? getInvStatus(a) : (a[col] || '');
+    let vb = col === 'status' ? getInvStatus(b) : (b[col] || '');
+    if (col === 'total') { va = parseFloat(va) || 0; vb = parseFloat(vb) || 0; }
+    const cmp = typeof va === 'number' ? va - vb : String(va).localeCompare(String(vb));
+    return dir === 'asc' ? cmp : -cmp;
+  });
+
+  if (!invs.length) {
+    tbody.innerHTML = `<tr><td colspan="10" class="empty-state">Aucune facture${filterSt || filterGL ? ' pour ce filtre' : ''}</td></tr>`;
+    return;
+  }
+
+  const t = new Date(); t.setHours(0,0,0,0);
+  tbody.innerHTML = invs.map(inv => {
+    const st = getInvStatus(inv);
+    const diff = Math.ceil((new Date(inv.dueDate) - t) / 86400000);
+    const diffTxt = st === 'paid' ? '' :
+                    st === 'overdue' ? `<br><span style="color:var(--danger);font-size:9px">${Math.abs(diff)}j retard</span>` :
+                    `<br><span style="color:var(--text-muted);font-size:9px">dans ${diff}j</span>`;
+    const srcBadge = inv.source === 'quickbooks'
+      ? `<span class="badge badge-qbo">QBO</span>`
+      : inv.source === 'csv'
+        ? `<span class="badge" style="background:rgba(201,168,76,.12);color:var(--accent2);border:1px solid rgba(201,168,76,.2)">CSV</span>`
+        : `<span class="badge" style="background:rgba(91,141,238,.1);color:var(--info);border:1px solid rgba(91,141,238,.2)">Manuel</span>`;
     return `<tr>
       <td style="color:var(--text);font-weight:500">${inv.vendor}</td>
-      <td>${inv.invoiceNum}</td>
-      <td>${inv.invDate}</td>
+      <td style="color:var(--text-dim)">${inv.invoiceNum}</td>
+      <td style="color:var(--text-dim)">${inv.invDate}</td>
       <td>${inv.dueDate}${diffTxt}</td>
       <td><span class="tag-gl">${inv.glCode}</span><br><span style="font-size:9px;color:var(--text-muted)">${inv.glNom}</span></td>
-      <td style="max-width:140px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-dim)">${inv.description||'—'}</td>
-      <td>${inv.subtotal?fmt(inv.subtotal):'—'}</td>
-      <td>${inv.tps?fmt(inv.tps):'—'}</td>
-      <td>${inv.tvq?fmt(inv.tvq):'—'}</td>
+      <td style="max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-dim)">${inv.description || '—'}</td>
       <td style="color:var(--accent2);font-weight:500">${fmt(inv.total)}</td>
       <td>${srcBadge}</td>
       <td>${statusBadge(st)}</td>
       <td style="white-space:nowrap">
-        ${!inv.paid?`<button class="btn btn-success btn-sm" onclick="markPaid(${inv.id})">✓ Payé</button> `:''}
+        ${!inv.paid ? `<button class="btn btn-success btn-sm" onclick="markPaid(${inv.id})">✓ Payé</button> ` : ''}
         <button class="btn btn-danger btn-sm" onclick="deleteInvoice(${inv.id})">✕</button>
       </td>
     </tr>`;
@@ -1302,39 +1546,35 @@ function renderInvTable() {
 // ═══════════════════════════════════════════════
 // SIMULATION
 // ═══════════════════════════════════════════════
-function setPeriod(d,btn) {
-  state.simPeriod=d;
-  document.querySelectorAll('.period-btn').forEach(b=>b.classList.remove('active'));
-  btn.classList.add('active'); runSimulation();
-}
+function setPeriod(d,btn) {} // kept for compat
 
 function toggleAllInvoices() {
-  const unpaid=currentInvoices().filter(i=>!i.paid);
-  const all=unpaid.every(i=>state.simSelected[i.id]!==false);
-  unpaid.forEach(i=>state.simSelected[i.id]=!all);
+  const allInvs = currentInvoices();
+  const allSelected = allInvs.every(i => state.simSelected[i.id] !== false);
+  allInvs.forEach(i => state.simSelected[i.id] = !allSelected);
   renderInvSelector(); runSimulation();
 }
 
 function renderInvSelector() {
-  const container=document.getElementById('invSelectorList');
-  const unpaid=currentInvoices().filter(i=>!i.paid);
-  if (!unpaid.length) { container.innerHTML='<div class="empty-state">Aucune facture non payée</div>'; return; }
-  unpaid.sort((a,b)=>new Date(a.dueDate)-new Date(b.dueDate));
-  container.innerHTML=unpaid.map(inv=>{
-    if (!(inv.id in state.simSelected)) state.simSelected[inv.id]=true;
-    const checked=state.simSelected[inv.id];
-    const override=state.simPayDates[inv.id]||'';
+  const container = document.getElementById('invSelectorList');
+  const allInvs = currentInvoices();
+  if (!allInvs.length) { container.innerHTML = '<div class="empty-state">Aucune facture</div>'; return; }
+  allInvs.sort((a,b) => new Date(a.dueDate) - new Date(b.dueDate));
+  container.innerHTML = allInvs.map(inv => {
+    if (!(inv.id in state.simSelected)) state.simSelected[inv.id] = true;
+    const checked = state.simSelected[inv.id];
+    const override = state.simPayDates[inv.id] || '';
     return `<div class="inv-sel-item">
       <input type="checkbox" class="inv-sel-check" ${checked?'checked':''} onchange="toggleInvSel(${inv.id},this.checked)">
       <div class="inv-sel-info">
         <div class="inv-sel-vendor">${inv.vendor}</div>
-        <div class="inv-sel-meta">Éch: ${inv.dueDate} · ${inv.glCode}</div>
+        <div class="inv-sel-meta">Éch: ${inv.dueDate} · ${inv.glCode}${inv.paid?' · <span style="color:var(--success)">Payé</span>':''}</div>
         <div style="margin-top:4px">
           <input type="date" class="payment-date-override" value="${override}" title="Override date paiement"
             onchange="setPayDateOverride(${inv.id},this.value)">
         </div>
       </div>
-      <span class="inv-sel-amt">${fmt(inv.total)}</span>
+      <span class="inv-sel-amt" style="color:${inv.paid?'var(--success)':'var(--accent2)'}">${fmt(inv.total)}</span>
     </div>`;
   }).join('');
 }
@@ -1342,84 +1582,187 @@ function renderInvSelector() {
 function toggleInvSel(id,c) { state.simSelected[id]=c; runSimulation(); }
 function setPayDateOverride(id,d) { if(d) state.simPayDates[id]=d; else delete state.simPayDates[id]; runSimulation(); }
 
-function runSimulation() {
-  const startDate=document.getElementById('simStartDate').value||today();
-  const openBal  =parseFloat(document.getElementById('simOpenBal').value)||0;
-  const dailyRev =parseFloat(document.getElementById('simDailyRev').value)||0;
-  const growth   =parseFloat(document.getElementById('simGrowth').value)/100;
-  const threshold=parseFloat(document.getElementById('simThreshold').value)||0;
-  const period   =state.simPeriod;
+// ── CALENDAR SIMULATION ──────────────────────────────────────────────────────
+function getCalMonth() {
+  const v = document.getElementById('simMonth')?.value;
+  if (v) return v;
+  const n = new Date();
+  return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}`;
+}
 
-  const invsByDate={};
-  currentInvoices().filter(i=>!i.paid).forEach(inv=>{
-    if (state.simSelected[inv.id]===false) return;
-    const payDate=state.simPayDates[inv.id]||inv.dueDate;
-    if (!invsByDate[payDate]) invsByDate[payDate]=[];
+function changeCalMonth(delta) {
+  const [y, m] = getCalMonth().split('-').map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  document.getElementById('simMonth').value =
+    `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  runSimulation();
+}
+
+function applyDefaultRevenue() {
+  const monthKey = getCalMonth();
+  const [y, m] = monthKey.split('-').map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const def = parseFloat(document.getElementById('simDailyRev').value) || 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const ds = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    state.dailyRevenues[ds] = def;
+  }
+  runSimulation();
+}
+
+function resetDailyRevenues() {
+  const monthKey = getCalMonth();
+  const [y, m] = monthKey.split('-').map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const def = parseFloat(document.getElementById('simDailyRev').value) || 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const ds = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    state.dailyRevenues[ds] = def;
+  }
+  runSimulation();
+}
+
+function setDayRevenue(dateStr, val) {
+  state.dailyRevenues[dateStr] = parseFloat(val) || 0;
+  runSimulation();
+}
+
+function renderCalendar() {
+  const monthKey = getCalMonth();
+  const [y, m] = monthKey.split('-').map(Number);
+  const monthNames = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+  const labelEl = document.getElementById('calMonthLabel');
+  if (labelEl) labelEl.textContent = `${monthNames[m-1]} ${y}`;
+
+  const firstDay = new Date(y, m-1, 1).getDay();
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const prevDays = new Date(y, m-1, 0).getDate();
+  const todayStr = today();
+  const threshold = parseFloat(document.getElementById('simThreshold')?.value) || 0;
+  const defaultRev = parseFloat(document.getElementById('simDailyRev')?.value) || 0;
+
+  // Invoice map
+  const invMap = {};
+  currentInvoices().forEach(inv => {
+    if (state.simSelected[inv.id] === false) return;
+    const payDate = state.simPayDates[inv.id] || inv.dueDate;
+    if (payDate.startsWith(monthKey)) {
+      if (!invMap[payDate]) invMap[payDate] = [];
+      invMap[payDate].push(inv);
+    }
+  });
+
+  const balMap = window._simBalanceMap || {};
+  const days = ['Dim','Lun','Mar','Mer','Jeu','Ven','Sam'];
+
+  let html = `<div class="cal-grid">`;
+  days.forEach(d => html += `<div class="cal-day-header">${d}</div>`);
+
+  for (let i = 0; i < firstDay; i++) {
+    html += `<div class="cal-day other-month"><div class="cal-day-num">${prevDays - firstDay + i + 1}</div></div>`;
+  }
+
+  for (let d = 1; d <= daysInMonth; d++) {
+    const ds = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const isToday = ds === todayStr;
+    const dayInvs = invMap[ds] || [];
+    const dayBal = balMap[ds];
+    const isLowBal = dayBal !== undefined && dayBal < threshold && dayBal >= 0;
+    const isDeficit = dayBal !== undefined && dayBal < 0;
+    const rev = state.dailyRevenues[ds] ?? defaultRev;
+
+    let cls = 'cal-day';
+    if (isToday) cls += ' today';
+    if (dayInvs.some(i => !i.paid)) cls += ' has-invoice';
+    if (isLowBal) cls += ' low-balance';
+
+    const balColor = dayBal === undefined ? 'var(--text-muted)' :
+                     dayBal < 0 ? 'var(--danger)' :
+                     dayBal < threshold ? 'var(--warning)' : 'var(--success)';
+
+    html += `<div class="${cls}">
+      <div class="cal-day-num ${isToday?'today-num':''}"><span>${d}</span></div>
+      <input type="number" class="cal-rev-input" value="${rev}" min="0" step="100"
+        title="Revenu du ${ds}" placeholder="0"
+        onchange="setDayRevenue('${ds}',this.value)" onclick="event.stopPropagation()">
+      ${dayInvs.map(inv => `<span class="cal-inv-chip ${inv.paid?'paid':'unpaid'}" title="${inv.vendor} — ${fmt(inv.total)}">${inv.paid?'✓ ':''}${inv.vendor.slice(0,10)} ${fmtShort(inv.total)}</span>`).join('')}
+      ${dayBal !== undefined ? `<div class="cal-balance" style="color:${balColor}">${fmtShort(dayBal)}</div>` : ''}
+    </div>`;
+  }
+
+  const total = firstDay + daysInMonth;
+  const trailing = total % 7 === 0 ? 0 : 7 - (total % 7);
+  for (let i = 1; i <= trailing; i++) {
+    html += `<div class="cal-day other-month"><div class="cal-day-num">${i}</div></div>`;
+  }
+  html += '</div>';
+  const grid = document.getElementById('calendarGrid');
+  if (grid) grid.innerHTML = html;
+}
+
+function runSimulation() {
+  const monthKey  = getCalMonth();
+  const openBal   = parseFloat(document.getElementById('simOpenBal')?.value) || 0;
+  const defaultRev = parseFloat(document.getElementById('simDailyRev')?.value) || 0;
+  const growth    = (parseFloat(document.getElementById('simGrowth')?.value) || 0) / 100;
+  const threshold = parseFloat(document.getElementById('simThreshold')?.value) || 0;
+  const showPaid  = document.getElementById('showPaidInProj')?.checked !== false;
+
+  const [y, m] = monthKey.split('-').map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+
+  const invsByDate = {};
+  currentInvoices().forEach(inv => {
+    if (state.simSelected[inv.id] === false) return;
+    const payDate = state.simPayDates[inv.id] || inv.dueDate;
+    if (!invsByDate[payDate]) invsByDate[payDate] = [];
     invsByDate[payDate].push(inv);
   });
 
-  let balance=openBal, totalRev=0, totalPay=0, minBal=openBal, minBalDate=startDate;
-  const dates=[], balances=[], projRows=[];
+  let balance = openBal, totalRev = 0, totalPay = 0;
+  let minBal = openBal, minBalDate = `${y}-${String(m).padStart(2,'0')}-01`;
+  const balanceMap = {};
+  const projRows = [];
 
-  for (let d=0;d<period;d++) {
-    const dateStr=addDays(startDate,d);
-    const rev=dailyRev*Math.pow(1+growth,Math.floor(d/30));
-    const dayInvs=invsByDate[dateStr]||[];
-    const payments=dayInvs.reduce((s,i)=>s+i.total,0);
-    const openDay=balance;
-    balance=balance+rev-payments;
-    totalRev+=rev; totalPay+=payments;
-    if (balance<minBal){minBal=balance;minBalDate=dateStr;}
-    dates.push(dateStr); balances.push(Math.round(balance*100)/100);
-    if (payments>0||d===0||d===period-1) projRows.push({date:dateStr,openBal:openDay,rev,payments,net:rev-payments,closeBal:balance,invoices:dayInvs});
+  for (let d = 1; d <= daysInMonth; d++) {
+    const ds = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const monthFactor = Math.pow(1 + growth, m - 1);
+    const rev = (state.dailyRevenues[ds] ?? defaultRev) * monthFactor;
+
+    const dayInvs = invsByDate[ds] || [];
+    const unpaidInvs = dayInvs.filter(i => !i.paid);
+    const payments = unpaidInvs.reduce((s, i) => s + i.total, 0);
+
+    const openDay = balance;
+    balance = balance + rev - payments;
+    totalRev += rev; totalPay += payments;
+    if (balance < minBal) { minBal = balance; minBalDate = ds; }
+    balanceMap[ds] = Math.round(balance * 100) / 100;
+
+    const tableInvs = showPaid ? dayInvs : unpaidInvs;
+    if (tableInvs.length > 0 || d === 1 || d === daysInMonth) {
+      projRows.push({ date: ds, openBal: openDay, rev, payments, net: rev - payments, closeBal: balance, invoices: tableInvs });
+    }
   }
 
-  document.getElementById('kpiOpen').textContent     = fmtShort(openBal);
-  document.getElementById('kpiRevenue').textContent  = fmtShort(totalRev);
-  document.getElementById('kpiPayments').textContent = fmtShort(totalPay);
-  document.getElementById('kpiMinBal').textContent   = fmtShort(minBal);
-  document.getElementById('kpiMinBalDate').textContent= minBalDate;
-  document.getElementById('kpiClose').textContent    = fmtShort(balance);
-  document.getElementById('kpiMinBal').style.color   = minBal<0?'var(--danger)':minBal<threshold?'var(--warning)':'var(--text)';
+  window._simBalanceMap = balanceMap;
+
+  // KPIs
+  document.getElementById('kpiOpen').textContent      = fmtShort(openBal);
+  document.getElementById('kpiRevenue').textContent   = fmtShort(totalRev);
+  document.getElementById('kpiPayments').textContent  = fmtShort(totalPay);
+  document.getElementById('kpiMinBal').textContent    = fmtShort(minBal);
+  document.getElementById('kpiMinBalDate').textContent = minBalDate;
+  document.getElementById('kpiClose').textContent     = fmtShort(balance);
+  document.getElementById('kpiMinBal').style.color    = minBal < 0 ? 'var(--danger)' : minBal < threshold ? 'var(--warning)' : 'var(--text)';
 
   hideSimAlerts();
-  if (minBal<0) showSimAlert('danger',`Déficit projeté: solde de ${fmt(minBal)} le ${minBalDate}. Action corrective requise.`);
-  else if (minBal<threshold) showSimAlert('warn',`Solde sous le seuil d'alerte: ${fmt(minBal)} prévu le ${minBalDate}.`);
-  else showSimAlert('ok',`Liquidité saine sur toute la période. Solde min: ${fmt(minBal)} le ${minBalDate}.`);
+  if (minBal < 0) showSimAlert('danger', `⚠ Déficit projeté: ${fmt(minBal)} le ${minBalDate}. Décalez des paiements ou augmentez les revenus prévus.`);
+  else if (minBal < threshold) showSimAlert('warn', `Solde sous le seuil le ${minBalDate}: ${fmt(minBal)}. Surveiller la liquidité.`);
+  else showSimAlert('ok', `Liquidité saine sur tout le mois. Solde minimum: ${fmt(minBal)} le ${minBalDate}.`);
 
-  renderChart(dates,balances,threshold);
-  renderProjTable(projRows,threshold);
-}
-
-function renderChart(dates,balances,threshold) {
-  const ctx=document.getElementById('cashflowChart').getContext('2d');
-  const step=Math.max(1,Math.floor(dates.length/12));
-  const labels=dates.map((d,i)=>i%step===0?d.slice(5):'');
-  if (cashflowChart) cashflowChart.destroy();
-  cashflowChart=new Chart(ctx,{
-    type:'line',
-    data:{
-      labels,
-      datasets:[
-        { label:'Solde', data:balances, borderColor:'#c9a84c',
-          backgroundColor:c=>{const g=c.chart.ctx.createLinearGradient(0,0,0,265);g.addColorStop(0,'rgba(201,168,76,.25)');g.addColorStop(1,'rgba(201,168,76,.02)');return g;},
-          fill:true, tension:.35, borderWidth:2, pointRadius:0, pointHoverRadius:5, pointHoverBackgroundColor:'#c9a84c' },
-        { label:'Seuil', data:Array(balances.length).fill(threshold),
-          borderColor:'rgba(224,92,92,.5)', borderDash:[6,4], borderWidth:1, pointRadius:0, fill:false }
-      ]
-    },
-    options:{
-      responsive:true, maintainAspectRatio:false, interaction:{mode:'index',intersect:false},
-      plugins:{legend:{display:false},tooltip:{backgroundColor:'#11141c',borderColor:'#252c3d',borderWidth:1,
-        titleColor:'#9ca3b0',bodyColor:'#e8eaf2',
-        titleFont:{family:'DM Mono',size:10},bodyFont:{family:'DM Mono',size:11},
-        callbacks:{title:c=>dates[c[0].dataIndex],label:c=>c.datasetIndex===0?` Solde: ${fmt(c.parsed.y)}`:`Seuil: ${fmt(c.parsed.y)}`}}},
-      scales:{
-        x:{grid:{color:'rgba(37,44,61,.8)',drawBorder:false},ticks:{color:'#5c6478',font:{family:'DM Mono',size:9},maxRotation:0},border:{display:false}},
-        y:{grid:{color:'rgba(37,44,61,.8)',drawBorder:false},ticks:{color:'#5c6478',font:{family:'DM Mono',size:9},callback:v=>Math.abs(v)>=1000?(v/1000).toFixed(0)+'k$':v+'$'},border:{display:false}}
-      }
-    }
-  });
+  renderCalendar();
+  renderProjTable(projRows, threshold);
 }
 
 function renderProjTable(rows,threshold) {
@@ -1597,11 +1940,321 @@ function closeQBOImportModal() {
 }
 
 // ═══════════════════════════════════════════════
+// CSV IMPORT
+// ═══════════════════════════════════════════════
+let csvData = { headers: [], rows: [], fileName: '' };
+
+const CSV_FIELDS = [
+  { key: 'vendor',      label: 'Fournisseur *',        required: true  },
+  { key: 'invoiceNum',  label: 'N° Facture',            required: false },
+  { key: 'invDate',     label: 'Date Facture',          required: false },
+  { key: 'dueDate',     label: 'Date Échéance *',       required: true  },
+  { key: 'subtotal',    label: 'Sous-total',            required: false },
+  { key: 'tps',         label: 'TPS',                   required: false },
+  { key: 'tvq',         label: 'TVQ',                   required: false },
+  { key: 'total',       label: 'Total *',               required: true  },
+  { key: 'glCode',      label: 'Code GL',               required: false },
+  { key: 'description', label: 'Description',           required: false },
+  { key: 'notes',       label: 'Notes',                 required: false },
+];
+
+function openCSVImport() {
+  if (!state.currentClient) { showError('Sélectionnez un client d\'abord.'); return; }
+  document.getElementById('csvImportModal').classList.add('open');
+  document.getElementById('csvStep1').style.display = 'block';
+  document.getElementById('csvStep2').style.display = 'none';
+}
+
+function closeCSVImport() {
+  document.getElementById('csvImportModal').classList.remove('open');
+  resetCSVImport();
+}
+
+function resetCSVImport() {
+  csvData = { headers: [], rows: [], fileName: '' };
+  document.getElementById('csvFileInput').value = '';
+  document.getElementById('csvStep1').style.display = 'block';
+  document.getElementById('csvStep2').style.display = 'none';
+}
+
+function handleCSVFile(file) {
+  if (!file) return;
+  csvData.fileName = file.name;
+  const reader = new FileReader();
+  reader.onload = e => {
+    parseCSV(e.target.result);
+  };
+  reader.readAsText(file, 'UTF-8');
+}
+
+// Setup drag & drop for CSV zone
+document.addEventListener('DOMContentLoaded', () => {
+  const zone = document.getElementById('csvUploadZone');
+  if (!zone) return;
+  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault(); zone.classList.remove('drag-over');
+    const f = e.dataTransfer.files[0];
+    if (f) handleCSVFile(f);
+  });
+});
+
+function parseCSV(text) {
+  // Handle different line endings
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter(l => l.trim());
+  if (lines.length < 2) { showError('CSV invalide — au moins 2 lignes requises (en-têtes + données).'); return; }
+
+  // Parse function that handles quoted fields
+  function parseLine(line) {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        inQuotes = !inQuotes;
+      } else if ((ch === ',' || ch === ';') && !inQuotes) {
+        result.push(current.trim());
+        current = '';
+      } else {
+        current += ch;
+      }
+    }
+    result.push(current.trim());
+    return result;
+  }
+
+  csvData.headers = parseLine(lines[0]);
+  csvData.rows    = lines.slice(1).map(l => parseLine(l)).filter(r => r.some(c => c));
+  csvData.fileName = csvData.fileName;
+
+  // Auto-detect column mapping
+  autoDetectMapping();
+
+  // Show step 2
+  document.getElementById('csvStep1').style.display = 'none';
+  document.getElementById('csvStep2').style.display = 'block';
+  document.getElementById('csvFileName').textContent = csvData.fileName;
+  document.getElementById('csvRowCount').textContent = csvData.rows.length;
+
+  renderMappingGrid();
+  renderCSVPreview();
+}
+
+function autoDetectMapping() {
+  // Smart auto-detection based on header names
+  const detect = {
+    vendor:      ['fournisseur','vendor','supplier','nom','name','company','entreprise'],
+    invoiceNum:  ['facture','invoice','n°','numero','number','ref','référence','no.'],
+    invDate:     ['date facture','invoice date','date','txndate','transaction date'],
+    dueDate:     ['échéance','echeance','due','duedate','due date','paiement'],
+    subtotal:    ['sous-total','subtotal','montant ht','amount','sous total','net'],
+    tps:         ['tps','gst','taxe fédérale','federal tax'],
+    tvq:         ['tvq','qst','taxe provinciale','provincial tax'],
+    total:       ['total','montant total','totalamt','amount total','grand total'],
+    glCode:      ['gl','compte','account','code','gl code'],
+    description: ['description','service','detail','memo','note'],
+    notes:       ['notes','commentaire','comment','remarque'],
+  };
+
+  window._csvMapping = {};
+  CSV_FIELDS.forEach(f => {
+    const keywords = detect[f.key] || [];
+    const found = csvData.headers.findIndex(h => {
+      const hl = h.toLowerCase().trim();
+      return keywords.some(kw => hl.includes(kw));
+    });
+    window._csvMapping[f.key] = found >= 0 ? found : -1;
+  });
+}
+
+function renderMappingGrid() {
+  const grid = document.getElementById('csvMappingGrid');
+  grid.innerHTML = CSV_FIELDS.map(f => `
+    <div class="field">
+      <label>${f.label}</label>
+      <select onchange="window._csvMapping['${f.key}']=parseInt(this.value);renderCSVPreview()"
+        style="background:var(--surface2);border:1px solid var(--border2);border-radius:var(--rs);color:var(--text);font-family:var(--mono);font-size:11px;padding:6px 10px;outline:none">
+        <option value="-1">— Ne pas importer —</option>
+        ${csvData.headers.map((h, i) =>
+          `<option value="${i}" ${window._csvMapping[f.key] === i ? 'selected' : ''}>${h}</option>`
+        ).join('')}
+      </select>
+    </div>
+  `).join('');
+}
+
+function getCSVValue(row, fieldKey) {
+  const idx = window._csvMapping[fieldKey];
+  if (idx === undefined || idx < 0) return '';
+  return (row[idx] || '').trim();
+}
+
+function parseCSVDate(str) {
+  if (!str) return '';
+  // Try YYYY-MM-DD first
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+  // Try MM/DD/YYYY
+  const mdy = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (mdy) return `${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}`;
+  // Try DD/MM/YYYY
+  const dmy = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (dmy) return `${dmy[3]}-${dmy[2].padStart(2,'0')}-${dmy[1].padStart(2,'0')}`;
+  // Try YYYY/MM/DD
+  const ymd = str.match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
+  if (ymd) return `${ymd[1]}-${ymd[2]}-${ymd[3]}`;
+  return str;
+}
+
+function parseCSVAmount(str) {
+  if (!str) return 0;
+  // Remove currency symbols, spaces, keep digits and decimal
+  const cleaned = str.replace(/[$,\s]/g, '').replace(',', '.');
+  const val = parseFloat(cleaned);
+  return isNaN(val) ? 0 : Math.round(val * 100) / 100;
+}
+
+function mapGLFromDescription(desc) {
+  const n = (desc || '').toLowerCase();
+  const map = [
+    { kw: ['téléphone','bell','vidéotron','telus','internet','rogers'],   code:'6090', nom:'Téléphone et communications' },
+    { kw: ['électricité','hydro','énergie','gas','eau'],                  code:'6110', nom:'Services publics' },
+    { kw: ['loyer','rent','location','bail'],                             code:'6060', nom:'Loyer et occupation' },
+    { kw: ['assurance','insurance'],                                      code:'6020', nom:'Assurances' },
+    { kw: ['publicité','marketing','ads','google','facebook','meta'],     code:'6000', nom:'Publicité et marketing' },
+    { kw: ['logiciel','software','saas','abonnement','subscription'],     code:'6130', nom:'Logiciels et technologie' },
+    { kw: ['transport','livraison','fedex','ups','purolator','shipping'], code:'6150', nom:'Expédition et livraison' },
+    { kw: ['comptable','avocat','notaire','légal','conseil','honoraire'], code:'6050', nom:'Honoraires professionnels' },
+    { kw: ['salaire','paie','rémunération'],                              code:'6080', nom:'Salaires et charges sociales' },
+    { kw: ['entretien','réparation','maintenance'],                       code:'6070', nom:'Réparations et entretien' },
+    { kw: ['véhicule','automobile','essence','carburant'],                code:'6120', nom:'Frais de véhicule' },
+    { kw: ['fourniture','papeterie','bureau','office'],                   code:'6040', nom:'Fournitures de bureau' },
+    { kw: ['matière','inventaire','stock','matériau'],                    code:'6170', nom:'Matières premières' },
+  ];
+  for (const entry of map) {
+    if (entry.kw.some(kw => n.includes(kw))) return { code: entry.code, nom: entry.nom };
+  }
+  return { code: '6190', nom: 'Autres dépenses' };
+}
+
+function buildInvoiceFromRow(row) {
+  const vendor      = getCSVValue(row, 'vendor');
+  const dueDate     = parseCSVDate(getCSVValue(row, 'dueDate'));
+  const totalRaw    = getCSVValue(row, 'total');
+  const total       = parseCSVAmount(totalRaw);
+  const subtotal    = parseCSVAmount(getCSVValue(row, 'subtotal'));
+  const tps         = parseCSVAmount(getCSVValue(row, 'tps'));
+  const tvq         = parseCSVAmount(getCSVValue(row, 'tvq'));
+  const description = getCSVValue(row, 'description');
+
+  // Auto-derive missing fields
+  const computedSubtotal = subtotal || (total / 1.14975);
+  const computedTPS = tps || Math.round(computedSubtotal * 0.05 * 100) / 100;
+  const computedTVQ = tvq || Math.round(computedSubtotal * 0.09975 * 100) / 100;
+
+  // GL account
+  let glCode = getCSVValue(row, 'glCode');
+  let glNom  = '';
+  if (glCode) {
+    // Try to match to known codes
+    const sel = document.getElementById('fGLAccount');
+    const found = sel ? Array.from(sel.options).find(o => o.value.startsWith(glCode)) : null;
+    if (found) { [glCode, glNom] = found.value.split('|'); }
+    else glNom = glCode;
+  } else {
+    const gl = mapGLFromDescription(description || vendor);
+    glCode = gl.code; glNom = gl.nom;
+  }
+
+  return {
+    id:          Date.now() + Math.random(),
+    vendor,
+    invoiceNum:  getCSVValue(row, 'invoiceNum') || '—',
+    invDate:     parseCSVDate(getCSVValue(row, 'invDate')) || today(),
+    dueDate:     dueDate || addDays(today(), 30),
+    glCode, glNom,
+    description,
+    subtotal:    subtotal || Math.round(computedSubtotal * 100) / 100,
+    tps:         computedTPS,
+    tvq:         computedTVQ,
+    total:       total || (subtotal + tps + tvq),
+    notes:       getCSVValue(row, 'notes') || 'Importé via CSV',
+    paid:        false,
+    source:      'csv',
+    createdAt:   new Date().toISOString()
+  };
+}
+
+function renderCSVPreview() {
+  const previewRows = csvData.rows.slice(0, 5);
+  const fields = CSV_FIELDS.filter(f => window._csvMapping[f.key] >= 0);
+
+  // Header
+  document.getElementById('csvPreviewHead').innerHTML =
+    `<tr>${fields.map(f => `<th>${f.label.replace(' *','')}</th>`).join('')}</tr>`;
+
+  // Rows
+  const tbody = document.getElementById('csvPreviewBody');
+  tbody.innerHTML = previewRows.map(row => {
+    const inv = buildInvoiceFromRow(row);
+    return `<tr>${fields.map(f => {
+      const val = f.key === 'total' ? fmt(inv.total) :
+                  f.key === 'subtotal' ? fmt(inv.subtotal) :
+                  f.key === 'tps' ? fmt(inv.tps) :
+                  f.key === 'tvq' ? fmt(inv.tvq) :
+                  f.key === 'glCode' ? `<span class="tag-gl">${inv.glCode}</span>` :
+                  inv[f.key] || '—';
+      return `<td>${val}</td>`;
+    }).join('')}</tr>`;
+  }).join('');
+
+  // Count valid rows
+  const validCount = csvData.rows.filter(row => {
+    const inv = buildInvoiceFromRow(row);
+    return inv.vendor && inv.total > 0;
+  }).length;
+  document.getElementById('csvImportCount').textContent = validCount;
+}
+
+function confirmCSVImport() {
+  if (!state.currentClient) { showError('Sélectionnez un client.'); return; }
+
+  const validInvoices = csvData.rows
+    .map(row => buildInvoiceFromRow(row))
+    .filter(inv => inv.vendor && inv.total > 0);
+
+  if (!validInvoices.length) { showError('Aucune facture valide trouvée. Vérifiez le mapping des colonnes.'); return; }
+
+  if (!state.invoices[state.currentClient]) state.invoices[state.currentClient] = [];
+  state.invoices[state.currentClient].push(...validInvoices);
+  saveState();
+  renderInvTable();
+  closeCSVImport();
+  showSuccess(`${validInvoices.length} facture${validInvoices.length > 1 ? 's' : ''} importée${validInvoices.length > 1 ? 's' : ''} avec succès depuis CSV.`);
+}
+
+// ═══════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════
 loadState();
-document.getElementById('simStartDate').value = today();
+
+// Set current month for simulation
+const _now = new Date();
+document.getElementById('simMonth').value = `${_now.getFullYear()}-${String(_now.getMonth()+1).padStart(2,'0')}`;
+
+// Keyboard shortcuts
 document.getElementById('newClientName').addEventListener('keydown', e => { if(e.key==='Enter') addClient(); });
+
+// Batch client count updater
+document.addEventListener('input', e => {
+  if (e.target.id === 'batchClientList') {
+    const count = e.target.value.split('\n').map(n=>n.trim()).filter(n=>n.length>0).length;
+    const el = document.getElementById('batchClientCount');
+    if (el) el.textContent = count > 0 ? `${count} client${count>1?'s':''} détecté${count>1?'s':''}` : '';
+  }
+});
+
 handleOAuthCallback(); // Process QBO OAuth redirect if present
 </script>
 </body>
