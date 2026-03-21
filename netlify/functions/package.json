@@ -1,0 +1,8 @@
+{
+  "name": "ap-manager-functions",
+  "version": "1.0.0",
+  "description": "Netlify Functions for AP Manager",
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0"
+  }
+}
